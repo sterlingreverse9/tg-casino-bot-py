@@ -1,4 +1,6 @@
 import threading
+import time
+import uuid
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -8,10 +10,13 @@ from wallet import get_or_create_user, get_balance, adjust_balance, get_house_ba
 from game_status import is_game_enabled, set_game_enabled
 from games.coinflip import play_coinflip
 from games.dice_roll import play_dice_roll, ALL_CHOICES
+from games.dice_duel import parse_dice_code, play_match, play_vs_bot, format_match_log, MIN_BET as DUEL_MIN_BET
 from middleware.admin import is_admin
 
 bot = telebot.TeleBot(BOT_TOKEN)
 active_rains = {}  # message_id -> {"amount", "chat_id", "participants": set()}
+pending_duels = {}  # match_id -> duel state dict
+HOUSE_EDGE_RAKE = 0.10
 
 
 def ensure_user(message):
@@ -77,17 +82,18 @@ def cmd_me(message):
     )
 
 
-@bot.message_handler(commands=["wallet"])
+@bot.message_handler(commands=["wallet" , "bal" , "balance" ])
 def cmd_wallet(message):
     ensure_user(message)
     balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: ₹{balance}\nMinimum Withdrawal: ₹70")
+    bot.reply_to(message, f"💰 Your balance: ₹{balance} \nMinimum Withdrawal : ₹70")
 
-@bot.message_handler(commands=["depo", "withdraw"])
+
+@bot.message_handler(commands=["depo", "withdraw" , "deposit" ])
 def cmd_depo_withdraw(message):
     bot.reply_to(
         message,
-        f"⚠️ Deposits and withdrawals are processed by @mrpuppyx . Pls contact him for deposit and withdraw— {CASINO_NAME} runs on manual deposit and withdraw, no automatic system right now.",
+        f"⚠️ Deposits and withdrawals are processed by @mrpuppyx , Pls contact him for deposit and withdraw — {CASINO_NAME} runs on manual deposit and withdraw no automatic system right now.",
     )
 
 
@@ -103,10 +109,10 @@ def cmd_rakeback(message):
     bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} coins\nBalance: {new_balance}")
 
 
-@bot.message_handler(commands=["housebal", "house"])
+@bot.message_handler(commands=["housebal", "house" , "hb" ])
 def cmd_housebal(message):
     bal = get_house_balance()
-    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: ₹{bal}")
+    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: ₹{bal} ")
 
 
 @bot.message_handler(commands=["history"])
@@ -182,7 +188,7 @@ def cmd_tip(message):
 
 
 # ---------- Games ----------
-@bot.message_handler(commands=["cf"])
+@bot.message_handler(commands=["cf" , "coinflip" ])
 def cmd_cf(message):
     ensure_user(message)
     if not is_game_enabled("cf"):
@@ -290,7 +296,7 @@ def cmd_add(message):
     get_or_create_user(target_id, None)
     new_balance = adjust_balance(target_id, amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added ₹{amount} \nUser: {target_id}\nNew balance: {new_balance}")
+    bot.reply_to(message, f"✅ Added {amount} ruppess\nUser: {target_id}\nNew balance: {new_balance}")
 
 
 @bot.message_handler(commands=["deduct"])
@@ -321,7 +327,7 @@ def cmd_deduct(message):
         return
     new_balance = adjust_balance(target_id, -amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted ₹{amount} \nUser: {target_id}\nBalance: {new_balance}")
+    bot.reply_to(message, f"✅ Deducted {amount} rupees\nUser: {target_id}\nBalance: {new_balance}")
 
 
 # ---------- Admin: promote/demote ----------
@@ -368,7 +374,7 @@ def cmd_updatehb(message):
     amount = float(parts[1])
     update("house", {"id": 1}, {"balance": amount})
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "updatehb", "amount": amount})
-    bot.reply_to(message, f"🏦 House balance set to {amount}.")
+    bot.reply_to(message, f"🏦 House balance set to ₹{amount}.")
 
 
 # ---------- Admin: rain ----------
@@ -393,7 +399,7 @@ def cmd_rain(message):
 
     sent = bot.send_message(
         message.chat.id,
-        f"🌧️ Rain of ₹{amount} starting!\nTap to join (min {MIN_WAGERED_FOR_RAIN} total wagered required).\nEnds in {seconds}s.",
+        f"🌧️ Rain of {amount} coins starting!\nTap to join (min {MIN_WAGERED_FOR_RAIN} total wagered required).\nEnds in {seconds}s.",
     )
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🌧️ Join Rain", callback_data=f"rainjoin:{sent.message_id}"))
@@ -419,7 +425,7 @@ def cmd_rain(message):
                 adjust_balance(uid, share)
             bot.send_message(
                 rain["chat_id"],
-                f"🌧️ Rain of {rain['amount']} rupees ended!\n{share} ruppess each to {len(participants)} users. 🎉",
+                f"🌧️ Rain of {rain['amount']} coins ended!\n{share} ruppess each to {len(participants)} users. 🎉",
             )
         try:
             bot.unpin_chat_message(rain["chat_id"], sent.message_id)
@@ -450,6 +456,192 @@ def handle_rain_join(call):
 
     rain["participants"].add(user_id)
     bot.answer_callback_query(call.id, "You joined the rain! 🌧️")
+
+
+# ---------- Dice Duel (vs bot or vs player) ----------
+def parse_dice_command(text: str):
+    """Returns (amount_str, code, opponent_username) from the raw command text, any order."""
+    tokens = text.split()[1:]
+    amount_str, code, opponent_username = None, "1d1w", None
+    for tok in tokens:
+        if tok.startswith("@"):
+            opponent_username = tok[1:]
+        elif parse_dice_code(tok.lower()):
+            code = tok.lower()
+        elif amount_str is None:
+            amount_str = tok
+    return amount_str, code, opponent_username
+
+
+def build_mode_keyboard(match_id: str):
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("Normal (highest sum wins)", callback_data=f"dmode:{match_id}:normal"),
+        InlineKeyboardButton("Crazy (lowest sum wins)", callback_data=f"dmode:{match_id}:crazy"),
+    )
+    return markup
+
+
+@bot.message_handler(commands=["dice"])
+def cmd_dice(message):
+    ensure_user(message)
+    if not is_game_enabled("dice"):
+        bot.reply_to(message, "Dice Duel is currently disabled.")
+        return
+
+    amount_str, code, opponent_username = parse_dice_command(message.text)
+    if amount_str is None:
+        bot.reply_to(message, "Usage: /dice <amount|all|half> [<dice>d<rounds>w] [@opponent]\nExample: /dice 10 3d1w  or  /dice half @user 2d1w")
+        return
+
+    parsed = parse_dice_code(code)
+    if parsed is None:
+        bot.reply_to(message, "Invalid dice code. Format is <dice>d<rounds>w, e.g. 3d1w (max 5 dice, 9 rounds).")
+        return
+    dice_count, rounds = parsed
+
+    opponent_id = None
+    if opponent_username:
+        opponent = select("users", filters={"username": opponent_username}, single=True)
+        if not opponent:
+            bot.reply_to(message, f"@{opponent_username} needs to message this bot at least once (e.g. /me) before they can be challenged.")
+            return
+        opponent_id = int(opponent["telegram_id"])
+        if opponent_id == message.from_user.id:
+            bot.reply_to(message, "You can't challenge yourself.")
+            return
+
+    match_id = uuid.uuid4().hex[:10]
+    pending_duels[match_id] = {
+        "initiator_id": message.from_user.id,
+        "initiator_name": message.from_user.username or message.from_user.first_name,
+        "amount_str": amount_str,
+        "dice_count": dice_count,
+        "rounds": rounds,
+        "opponent_id": opponent_id,
+        "opponent_username": opponent_username,
+        "chat_id": message.chat.id,
+        "mode": None,
+        "status": "choosing_mode",
+    }
+
+    bot.reply_to(message, "🎲 Choose your game mode:", reply_markup=build_mode_keyboard(match_id))
+@bot.callback_query_handler(func=lambda call: call.data.startswith("dmode:"))
+def handle_dice_mode(call):
+    _, match_id, mode = call.data.split(":")
+    duel = pending_duels.get(match_id)
+    if duel is None:
+        bot.answer_callback_query(call.id, "This challenge has expired.")
+        return
+    if call.from_user.id != duel["initiator_id"]:
+        bot.answer_callback_query(call.id, "This isn't your game.")
+        return
+
+    bot.answer_callback_query(call.id)
+    duel["mode"] = mode
+
+    if duel["opponent_id"] is None:
+        # vs bot: resolve amount and play immediately
+        amount = resolve_amount(duel["initiator_id"], duel["amount_str"])
+        if amount is None:
+            bot.send_message(duel["chat_id"], "Amount must be a number, 'all', or 'half'.")
+            pending_duels.pop(match_id, None)
+            return
+        pending_duels.pop(match_id, None)
+        play_vs_bot(bot, duel["chat_id"], duel["initiator_id"], amount, duel["dice_count"], duel["rounds"], mode)
+        return
+
+    # vs player: send challenge with accept/decline, 120s expiry
+    duel["status"] = "awaiting_accept"
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("✅ Accept", callback_data=f"daccept:{match_id}"),
+        InlineKeyboardButton("❌ Decline", callback_data=f"ddecline:{match_id}"),
+    )
+    bot.send_message(
+        duel["chat_id"],
+        f"⚔️ {duel['initiator_name']} challenges @{duel['opponent_username']} to a Dice Duel!\n"
+        f"{duel['dice_count']} dice, {duel['rounds']} round(s), {mode} mode, bet: {duel['amount_str']} coins each.\n"
+        f"@{duel['opponent_username']} has 120 seconds to accept.",
+        reply_markup=markup,
+    )
+
+    def expire_duel():
+        d = pending_duels.get(match_id)
+        if d and d["status"] == "awaiting_accept":
+            pending_duels.pop(match_id, None)
+            bot.send_message(d["chat_id"], f"⌛ The challenge to @{d['opponent_username']} expired.")
+
+    threading.Timer(120, expire_duel).start()
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("daccept:") or call.data.startswith("ddecline:"))
+def handle_dice_response(call):
+    action, match_id = call.data.split(":")
+    duel = pending_duels.get(match_id)
+    if duel is None or duel["status"] != "awaiting_accept":
+        bot.answer_callback_query(call.id, "This challenge is no longer active.")
+        return
+    if call.from_user.id != duel["opponent_id"]:
+        bot.answer_callback_query(call.id, "This challenge isn't for you.")
+        return
+
+    if action == "ddecline":
+        pending_duels.pop(match_id, None)
+        bot.answer_callback_query(call.id, "Challenge declined.")
+        bot.send_message(duel["chat_id"], f"❌ @{duel['opponent_username']} declined the challenge.")
+        return
+
+    bot.answer_callback_query(call.id)
+    pending_duels.pop(match_id, None)
+
+    initiator_id, opponent_id = duel["initiator_id"], duel["opponent_id"]
+    initiator_amount = resolve_amount(initiator_id, duel["amount_str"])
+    opponent_amount = resolve_amount(opponent_id, duel["amount_str"])
+
+    if initiator_amount is None or opponent_amount is None:
+        bot.send_message(duel["chat_id"], "Amount must be a number, 'all', or 'half'.")
+        return
+    if initiator_amount < DUEL_MIN_BET or opponent_amount < DUEL_MIN_BET:
+        bot.send_message(duel["chat_id"], f"Minimum bet is {DUEL_MIN_BET} coins for both players.")
+        return
+    if initiator_amount > get_balance(initiator_id):
+        bot.send_message(duel["chat_id"], f"{duel['initiator_name']} doesn't have enough balance anymore.")
+        return
+    if opponent_amount > get_balance(opponent_id):
+        bot.send_message(duel["chat_id"], f"@{duel['opponent_username']} doesn't have enough balance anymore.")
+        return
+
+    adjust_balance(initiator_id, -initiator_amount)
+    adjust_balance(opponent_id, -opponent_amount)
+
+    winner, round_log = play_match(duel["dice_count"], duel["rounds"], duel["mode"])
+    pot = initiator_amount + opponent_amount
+    rake = round(pot * HOUSE_EDGE_RAKE, 2)
+    winner_payout = round(pot - rake, 2)
+
+    winner_id = initiator_id if winner == "a" else opponent_id
+    loser_id = opponent_id if winner == "a" else initiator_id
+    winner_name = duel["initiator_name"] if winner == "a" else duel["opponent_username"]
+
+    adjust_balance(winner_id, winner_payout)
+
+    record_bet(telegram_id=initiator_id, game="dice_duel_pvp", bet_amount=initiator_amount,
+               payout=winner_payout if winner == "a" else 0, result="win" if winner == "a" else "loss",
+               meta={"opponent": duel["opponent_username"], "mode": duel["mode"]})
+    record_bet(telegram_id=opponent_id, game="dice_duel_pvp", bet_amount=opponent_amount,
+               payout=winner_payout if winner == "b" else 0, result="win" if winner == "b" else "loss",
+               meta={"opponent": duel["initiator_name"], "mode": duel["mode"]})
+
+    house = select("house", filters={"id": 1}, single=True)
+    update("house", {"id": 1}, {"balance": float(house["balance"]) + rake})
+
+    text = (
+        f"⚔️ Dice Duel • {duel['mode']} mode\n"
+        + format_match_log(round_log, duel["initiator_name"], duel["opponent_username"])
+        + f"\n\n🏆 {winner_name} wins {winner_payout} rupees!"
+    )
+    bot.send_message(duel["chat_id"], text)
 
 
 print(f"{CASINO_NAME} bot running...")
