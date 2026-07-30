@@ -33,14 +33,16 @@ def cmd_me(message):
 def cmd_wallet(message):
     ensure_user(message)
     balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: {balance} coins")
+    bot.reply_to(message, f"👤 Name: {fullname}
+💵 Balance: ₹{balance}
+Min withdrawal: ₹70")
 
 
-@bot.message_handler(commands=["depo", "withdraw"])
+@bot.message_handler(commands=["depo","deposit" , "withdraw"])
 def cmd_depo_withdraw(message):
     bot.reply_to(
         message,
-        f"⚠️ Deposits and withdrawals aren't available — {CASINO_NAME} runs on fun coins only, no real money.",
+        f"⚠️ Deposits and withdrawals are processed by @mrpuppyx , contact him to deposit and withdraw — {CASINO_NAME} runs on manual deposit and withdraw only.",
     )
 
 
@@ -56,7 +58,7 @@ def cmd_rakeback(message):
     bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} coins\nBalance: {new_balance}")
 
 
-@bot.message_handler(commands=["housebal", "house"])
+@bot.message_handler(commands=["housebal", "house" , "hb" ])
 def cmd_housebal(message):
     bal = get_house_balance()
     bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: {bal} coins")
