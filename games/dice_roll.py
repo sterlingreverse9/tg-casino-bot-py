@@ -31,7 +31,7 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
     max_bet = house_balance * 0.05
 
     if bet_amount < MIN_BET:
-        bot.send_message(chat_id, f"Minimum bet is {MIN_BET} coins.")
+        bot.send_message(chat_id, f"Minimum bet is {MIN_BET} ruppess.")
         return
     if bet_amount > max_bet:
         bot.send_message(chat_id, f"Maximum bet is {round(max_bet, 2)} coins (5% of house balance).")
@@ -71,10 +71,10 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
     if won:
         bot.send_message(
             chat_id,
-            f"🎲 Rolled {roll}!\nYou bet on {label}\n✅ You won {payout} coins!\nBalance: {new_balance}",
+            f"🎲 Rolled {roll}!\nYou bet on {label}\n✅ You won {payout} ruppess!\nBalance: {new_balance}",
         )
     else:
         bot.send_message(
             chat_id,
-            f"🎲 Rolled {roll}!\nYou bet on {label}\n❌ You lost {bet_amount} coins.\nBalance: {new_balance}",
+            f"🎲 Rolled {roll}!\nYou bet on {label}\n❌ You lost {bet_amount} ruppess.\nBalance: {new_balance}",
         )
