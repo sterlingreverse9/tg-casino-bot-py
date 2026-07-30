@@ -1,7 +1,7 @@
 from db import select
 
 # Replace with your Telegram numeric user ID
-OWNER_ID = 123456789
+OWNER_ID = 8639544409
 
 def is_admin(telegram_id: int) -> bool:
     # Always allow the owner
