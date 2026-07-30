@@ -35,7 +35,6 @@ def cmd_wallet(message):
     balance = get_balance(message.from_user.id)
     bot.reply_to(
     message,
-    f"👤 Name: {message.from_user.first_name}\n"
     f"💵 Balance: ₹{balance}\n"
     f"Min withdrawal: ₹70"
 )
