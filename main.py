@@ -81,9 +81,7 @@ def cmd_me(message):
 def cmd_wallet(message):
     ensure_user(message)
     balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: ₹{balance} 
-Minimum Withdrawal : ₹70")
-
+    bot.reply_to(message, f"💰 Your balance: ₹{balance}\nMinimum Withdrawal: ₹70")
 
 @bot.message_handler(commands=["depo", "withdraw"])
 def cmd_depo_withdraw(message):
