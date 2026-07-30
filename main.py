@@ -63,7 +63,7 @@ def cmd_rakeback(message):
 @bot.message_handler(commands=["housebal", "house" , "hb" ])
 def cmd_housebal(message):
     bal = get_house_balance()
-    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: {bal} coins")
+    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: ₹{bal}")
 
 
 @bot.message_handler(commands=["history"])
