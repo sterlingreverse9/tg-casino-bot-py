@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from config import BOT_TOKEN, CASINO_NAME
-from db import supabase
+from db import select, insert, update
 from wallet import get_or_create_user, get_balance, adjust_balance, get_house_balance
 from games.coinflip import play_coinflip
 from games.dice import play_dice
@@ -26,7 +26,7 @@ async def ensure_user(message: Message):
 @dp.message(Command("me", "profile"))
 async def cmd_me(message: Message):
     await ensure_user(message)
-    user = supabase.table("users").select("*").eq("telegram_id", message.from_user.id).execute().data[0]
+    user = select("users", filters={"telegram_id": message.from_user.id}, single=True)
     await message.reply(
         f"👤 {message.from_user.username or message.from_user.first_name} — {CASINO_NAME}\n"
         f"💰 Balance: {user['balance']}\n"
@@ -53,7 +53,7 @@ async def cmd_depo_withdraw(message: Message):
 @dp.message(Command("rakeback"))
 async def cmd_rakeback(message: Message):
     await ensure_user(message)
-    user = supabase.table("users").select("total_lost").eq("telegram_id", message.from_user.id).execute().data[0]
+    user = select("users", filters={"telegram_id": message.from_user.id}, single=True)
     rakeback = round(float(user["total_lost"]) * 0.005, 2)
     if rakeback <= 0:
         await message.reply("No rakeback available yet — play a bit more first!")
@@ -71,32 +71,23 @@ async def cmd_housebal(message: Message):
 @dp.message(Command("history"))
 async def cmd_history(message: Message):
     await ensure_user(message)
-    bets = (
-        supabase.table("bets")
-        .select("*")
-        .eq("telegram_id", message.from_user.id)
-        .order("created_at", desc=True)
-        .limit(10)
-        .execute()
-        .data
+    bets = select(
+        "bets",
+        filters={"telegram_id": message.from_user.id},
+        order="created_at",
+        desc=True,
+        limit=10,
     )
     if not bets:
         await message.reply("No bets yet.")
         return
     lines = [f"{'✅' if b['result'] == 'win' else '❌'} {b['game']} | bet {b['bet_amount']} | payout {b['payout']}" for b in bets]
-    await message.reply(f"📜 Last 10 bets:\n" + "\n".join(lines))
+    await message.reply("📜 Last 10 bets:\n" + "\n".join(lines))
 
 
 @dp.message(Command("leaderboard", "ld"))
 async def cmd_leaderboard(message: Message):
-    top = (
-        supabase.table("users")
-        .select("username,total_won")
-        .order("total_won", desc=True)
-        .limit(10)
-        .execute()
-        .data
-    )
+    top = select("users", order="total_won", desc=True, limit=10)
     lines = [f"{i+1}. {u['username'] or 'Anonymous'} — {u['total_won']} coins won" for i, u in enumerate(top)]
     await message.reply(f"🏆 {CASINO_NAME} Leaderboard:\n" + "\n".join(lines))
 
@@ -194,9 +185,7 @@ async def cmd_add(message: Message):
     target_id, amount = int(parts[1]), float(parts[2])
     get_or_create_user(target_id, None)
     new_balance = adjust_balance(target_id, amount)
-    supabase.table("admin_actions").insert(
-        {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount}
-    ).execute()
+    insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
     await message.reply(f"✅ Added {amount} coins to {target_id}. New balance: {new_balance}")
 
 
@@ -211,9 +200,7 @@ async def cmd_deduct(message: Message):
         return
     target_id, amount = int(parts[1]), float(parts[2])
     new_balance = adjust_balance(target_id, -amount)
-    supabase.table("admin_actions").insert(
-        {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount}
-    ).execute()
+    insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
     await message.reply(f"✅ Deducted {amount} coins from {target_id}. New balance: {new_balance}")
 
 
@@ -227,12 +214,10 @@ async def cmd_rain(message: Message):
         await message.reply("Usage: /rain <amount>")
         return
     amount = float(parts[1])
-    users = supabase.table("users").select("telegram_id").execute().data
+    users = select("users")
     for u in users:
         adjust_balance(u["telegram_id"], amount)
-    supabase.table("admin_actions").insert(
-        {"admin_id": message.from_user.id, "action": "rain", "amount": amount}
-    ).execute()
+    insert("admin_actions", {"admin_id": message.from_user.id, "action": "rain", "amount": amount})
     await message.reply(f"🌧️ Rained {amount} coins to {len(users)} users.")
 
 
@@ -247,10 +232,8 @@ async def cmd_promote(message: Message):
         return
     target_id = int(parts[1])
     get_or_create_user(target_id, None)
-    supabase.table("users").update({"is_admin": True}).eq("telegram_id", target_id).execute()
-    supabase.table("admin_actions").insert(
-        {"admin_id": message.from_user.id, "action": "promote", "target_id": target_id}
-    ).execute()
+    update("users", {"telegram_id": target_id}, {"is_admin": True})
+    insert("admin_actions", {"admin_id": message.from_user.id, "action": "promote", "target_id": target_id})
     await message.reply(f"👑 {target_id} is now an admin.")
 
 
@@ -264,10 +247,8 @@ async def cmd_updatehb(message: Message):
         await message.reply("Usage: /updatehb <amount>")
         return
     amount = float(parts[1])
-    supabase.table("house").update({"balance": amount}).eq("id", 1).execute()
-    supabase.table("admin_actions").insert(
-        {"admin_id": message.from_user.id, "action": "updatehb", "amount": amount}
-    ).execute()
+    update("house", {"id": 1}, {"balance": amount})
+    insert("admin_actions", {"admin_id": message.from_user.id, "action": "updatehb", "amount": amount})
     await message.reply(f"🏦 House balance set to {amount}.")
 
 
