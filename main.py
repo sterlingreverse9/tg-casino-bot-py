@@ -95,50 +95,99 @@ def cmd_leaderboard(message):
 def cmd_tip(message):
     ensure_user(message)
 
-    if not message.reply_to_message:
-        bot.reply_to(message, "Reply to the user's message with /tip <amount> to send them coins.")
-        return
-
     parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "Usage: reply to a user's message with /tip <amount>")
-        return
-
-    try:
-        amount = float(parts[1])
-    except ValueError:
-        bot.reply_to(message, "Amount must be a number.")
-        return
-
-    if amount <= 0:
-        bot.reply_to(message, "Amount must be positive.")
-        return
 
     sender_id = message.from_user.id
-    recipient = message.reply_to_message.from_user
-    recipient_id = recipient.id
 
-    if recipient_id == sender_id:
+    target_id = None
+    target_name = None
+
+    # Reply mode
+    if message.reply_to_message:
+        if len(parts) != 2:
+            bot.reply_to(message, "Usage (reply): /tip <amount|all>")
+            return
+
+        recipient = message.reply_to_message.from_user
+        target_id = recipient.id
+        target_name = recipient.username or recipient.first_name
+        amount_arg = parts[1]
+
+    # Username / ID mode
+    else:
+        if len(parts) != 3:
+            bot.reply_to(
+                message,
+                "Usage:\n"
+                "/tip @username <amount|all>\n"
+                "/tip <telegram_id> <amount|all>\n"
+                "Reply: /tip <amount|all>"
+            )
+            return
+
+        target = parts[1]
+        amount_arg = parts[2]
+
+        if target.startswith("@"):
+            user = select("users", filters={"username": target[1:]}, single=True)
+            if not user:
+                bot.reply_to(message, "User not found.")
+                return
+
+            target_id = int(user["telegram_id"])
+            target_name = user["username"]
+
+        else:
+            try:
+                target_id = int(target)
+            except:
+                bot.reply_to(message, "Invalid Telegram ID.")
+                return
+
+            user = select("users", filters={"telegram_id": target_id}, single=True)
+
+            if not user:
+                bot.reply_to(message, "User not found.")
+                return
+
+            target_name = user["username"] or str(target_id)
+
+    if target_id == sender_id:
         bot.reply_to(message, "You can't tip yourself.")
         return
 
+    get_or_create_user(target_id, target_name)
+
     balance = get_balance(sender_id)
-    if amount > balance:
-        bot.reply_to(message, f"Not enough coins. Your balance: {balance}")
+
+    if amount_arg.lower() == "all":
+        amount = balance
+    else:
+        try:
+            amount = float(amount_arg)
+        except:
+            bot.reply_to(message, "Amount must be a number or 'all'.")
+            return
+
+    if amount <= 0:
+        bot.reply_to(message, "Amount must be greater than 0.")
         return
 
-    get_or_create_user(recipient_id, recipient.username)
+    if amount > balance:
+        bot.reply_to(message, f"You only have ₹{balance}.")
+        return
+
     adjust_balance(sender_id, -amount)
-    new_recipient_balance = adjust_balance(recipient_id, amount)
+    new_balance = adjust_balance(target_id, amount)
 
     bot.reply_to(
         message,
-        f"🤝 {message.from_user.username or message.from_user.first_name} tipped "
-        f"{recipient.username or recipient.first_name} {amount} coins!\n"
-        f"Their new balance: {new_recipient_balance}",
+        f"💸 Tip Sent!\n\n"
+        f"To: {target_name}\n"
+        f"Amount: ₹{amount}\n"
+        f"Their Balance: ₹{new_balance}"
     )
-
-
+ 
 # ---------- Games ----------
 @bot.message_handler(commands=["cf"])
 def cmd_cf(message):
