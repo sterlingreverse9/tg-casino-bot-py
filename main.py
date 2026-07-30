@@ -15,7 +15,7 @@ def ensure_user(message):
 
 
 # ---------- Basic info commands ----------
-@bot.message_handler(commands=["me", "profile"])
+@bot.message_handler(commands=["me", "profile" , "stats" , "mystats" ])
 def cmd_me(message):
     ensure_user(message)
     user = select("users", filters={"telegram_id": message.from_user.id}, single=True)
@@ -29,7 +29,7 @@ def cmd_me(message):
     )
 
 
-@bot.message_handler(commands=["wallet"])
+@bot.message_handler(commands=["wallet" , "bal" , "balance" ])
 def cmd_wallet(message):
     ensure_user(message)
     balance = get_balance(message.from_user.id)
