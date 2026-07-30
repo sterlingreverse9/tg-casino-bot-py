@@ -1,7 +1,7 @@
 # admin permission check
-from db import supabase
+from db import select
 
 
 def is_admin(telegram_id: int) -> bool:
-    result = supabase.table("users").select("is_admin").eq("telegram_id", telegram_id).execute()
-    return bool(result.data and result.data[0]["is_admin"])
+    user = select("users", filters={"telegram_id": telegram_id}, single=True)
+    return bool(user and user.get("is_admin"))
