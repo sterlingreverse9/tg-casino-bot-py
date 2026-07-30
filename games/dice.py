@@ -3,13 +3,13 @@ from wallet import get_balance, adjust_balance, record_bet
 from game_math import payout_for
 
 
-async def play_dice(message, telegram_id: int, bet_amount: float, target: float):
+def play_dice(bot, message, telegram_id: int, bet_amount: float, target: float):
     balance = get_balance(telegram_id)
     if bet_amount <= 0 or bet_amount > balance:
-        await message.reply(f"Invalid bet. Your balance: {balance} coins.")
+        bot.reply_to(message, f"Invalid bet. Your balance: {balance} coins.")
         return
     if target < 2 or target > 98:
-        await message.reply("Target must be between 2 and 98.")
+        bot.reply_to(message, "Target must be between 2 and 98.")
         return
 
     win_chance = target / 100
@@ -29,6 +29,6 @@ async def play_dice(message, telegram_id: int, bet_amount: float, target: float)
     )
 
     if won:
-        await message.reply(f"🎲 Rolled {roll} (under {target})\nYou won {payout} coins! 🎉\nBalance: {new_balance}")
+        bot.reply_to(message, f"🎲 Rolled {roll} (under {target})\nYou won {payout} coins! 🎉\nBalance: {new_balance}")
     else:
-        await message.reply(f"🎲 Rolled {roll} (needed under {target})\nYou lost {bet_amount} coins.\nBalance: {new_balance}")
+        bot.reply_to(message, f"🎲 Rolled {roll} (needed under {target})\nYou lost {bet_amount} coins.\nBalance: {new_balance}")
