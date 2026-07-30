@@ -5,10 +5,10 @@ from game_math import payout_for
 WIN_CHANCE = 0.5
 
 
-async def play_coinflip(message, telegram_id: int, bet_amount: float, choice: str):
+def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str):
     balance = get_balance(telegram_id)
     if bet_amount <= 0 or bet_amount > balance:
-        await message.reply(f"Invalid bet. Your balance: {balance} coins.")
+        bot.reply_to(message, f"Invalid bet. Your balance: {balance} coins.")
         return
 
     outcome = random.choice(["heads", "tails"])
@@ -28,6 +28,6 @@ async def play_coinflip(message, telegram_id: int, bet_amount: float, choice: st
 
     flip_label = "🪙 Heads" if outcome == "heads" else "🪙 Tails"
     if won:
-        await message.reply(f"{flip_label}!\nYou won {payout} coins! 🎉\nBalance: {new_balance}")
+        bot.reply_to(message, f"{flip_label}!\nYou won {payout} coins! 🎉\nBalance: {new_balance}")
     else:
-        await message.reply(f"{flip_label}!\nYou lost {bet_amount} coins.\nBalance: {new_balance}")
+        bot.reply_to(message, f"{flip_label}!\nYou lost {bet_amount} coins.\nBalance: {new_balance}")
