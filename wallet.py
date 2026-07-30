@@ -50,3 +50,16 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
 def get_house_balance() -> float:
     house = select("house", filters={"id": 1}, single=True)
     return float(house["balance"]) if house else 0.0
+
+
+def resolve_amount(telegram_id: int, amount_str: str):
+    """Turn 'all', 'half', or a plain number into a float bet amount."""
+    s = amount_str.lower()
+    if s == "all":
+        return get_balance(telegram_id)
+    if s == "half":
+        return round(get_balance(telegram_id) / 2, 2)
+    try:
+        return float(amount_str)
+    except ValueError:
+        return None
