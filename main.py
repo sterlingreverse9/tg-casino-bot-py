@@ -169,6 +169,26 @@ def cmd_dice(message):
         bot.reply_to(message, "Amount and target must be numbers.")
         return
     play_dice(bot, message, message.from_user.id, bet_amount, target)
+def get_target_user(message, target):
+    # Reply method
+    if message.reply_to_message:
+        user = message.reply_to_message.from_user
+        get_or_create_user(user.id, user.username)
+        return user.id
+
+    # Username method
+    if target.startswith("@"):
+        username = target[1:]
+        user = select("users", filters={"username": username}, single=True)
+        if user:
+            return int(user["telegram_id"])
+        return None
+
+    # Telegram ID method
+    try:
+        return int(target)
+    except:
+        return None
 
 
 # ---------- Admin ----------
@@ -177,30 +197,101 @@ def cmd_add(message):
     if not is_admin(message.from_user.id):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
-    parts = message.text.split()
-    if len(parts) != 3:
-        bot.reply_to(message, "Usage: /add <telegram_id> <amount>")
-        return
-    target_id, amount = int(parts[1]), float(parts[2])
-    get_or_create_user(target_id, None)
-    new_balance = adjust_balance(target_id, amount)
-    insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added {amount} coins to {target_id}. New balance: {new_balance}")
 
+    parts = message.text.split()
+
+    try:
+        # Reply mode
+        if message.reply_to_message:
+            if len(parts) != 2:
+                bot.reply_to(message, "Usage (reply): /add <amount>")
+                return
+
+            target_id = message.reply_to_message.from_user.id
+            amount = float(parts[1])
+
+        # Username / ID mode
+        else:
+            if len(parts) != 3:
+                bot.reply_to(message, "Usage:\n/add <@username> <amount>\n/add <telegram_id> <amount>\nReply: /add <amount>")
+                return
+
+            target_id = get_target_user(message, parts[1])
+
+            if not target_id:
+                bot.reply_to(message, "User not found.")
+                return
+
+            amount = float(parts[2])
+
+        get_or_create_user(target_id, None)
+
+        new_balance = adjust_balance(target_id, amount)
+
+        insert("admin_actions", {
+            "admin_id": message.from_user.id,
+            "action": "add",
+            "target_id": target_id,
+            "amount": amount
+        })
+
+        bot.reply_to(
+            message,
+            f"✅ Added ₹{amount}\n"
+            f"User ID: {target_id}\n"
+            f"New Balance: ₹{new_balance}"
+        )
+
+    except:
+        bot.reply_to(message, "Invalid command.")
 
 @bot.message_handler(commands=["deduct"])
 def cmd_deduct(message):
     if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
+        bot.reply_to(message, "❌ You don't have permission.")
         return
+
     parts = message.text.split()
-    if len(parts) != 3:
-        bot.reply_to(message, "Usage: /deduct <telegram_id> <amount>")
-        return
-    target_id, amount = int(parts[1]), float(parts[2])
+
+    if message.reply_to_message:
+        if len(parts) != 2:
+            bot.reply_to(message, "Usage (reply): /deduct <amount|all>")
+            return
+
+        target_id = message.reply_to_message.from_user.id
+        amount_arg = parts[1]
+
+    else:
+        if len(parts) != 3:
+            bot.reply_to(message, "Usage: /deduct <@user|telegram_id> <amount|all>")
+            return
+
+        target_id = get_target_user(message, parts[1])
+
+        if not target_id:
+            bot.reply_to(message, "❌ User not found.")
+            return
+
+        amount_arg = parts[2]
+
+    if amount_arg.lower() == "all":
+        amount = get_balance(target_id)
+    else:
+        amount = float(amount_arg)
+
     new_balance = adjust_balance(target_id, -amount)
-    insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted {amount} coins from {target_id}. New balance: {new_balance}")
+
+    insert("admin_actions", {
+        "admin_id": message.from_user.id,
+        "action": "deduct",
+        "target_id": target_id,
+        "amount": amount
+    })
+
+    bot.reply_to(
+        message,
+        f"✅ Deducted ₹{amount}\n👤 User: {target_id}\n💰 Balance: ₹{new_balance}"
+    )
 
 
 @bot.message_handler(commands=["rain"])
