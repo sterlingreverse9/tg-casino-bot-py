@@ -10,12 +10,14 @@ from wallet import get_or_create_user, get_balance, adjust_balance, get_house_ba
 from game_status import is_game_enabled, set_game_enabled
 from games.coinflip import play_coinflip
 from games.dice_roll import play_dice_roll, ALL_CHOICES
-from games.dice_duel import parse_dice_code, play_match, play_vs_bot, format_match_log, MIN_BET as DUEL_MIN_BET
+from games.dice_duel import parse_dice_code, decide_round_winner, MIN_BET as DUEL_MIN_BET
 from middleware.admin import is_admin
 
 bot = telebot.TeleBot(BOT_TOKEN)
 active_rains = {}  # message_id -> {"amount", "chat_id", "participants": set()}
-pending_duels = {}  # match_id -> duel state dict
+dice_setups = {}  # setup_id -> in-progress wizard state
+active_matches = {}  # match_id -> live match state
+dice_waiters = {}  # (chat_id, telegram_id) -> match_id
 HOUSE_EDGE_RAKE = 0.10
 
 
@@ -86,14 +88,14 @@ def cmd_me(message):
 def cmd_wallet(message):
     ensure_user(message)
     balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: ₹{balance} \nMinimum Withdrawal : ₹70")
+    bot.reply_to(message, f"💰 Your balance: ₹{balance} ")
 
 
-@bot.message_handler(commands=["depo", "withdraw" , "deposit" ])
+@bot.message_handler(commands=["depo", "deposit" , "withdraw"])
 def cmd_depo_withdraw(message):
     bot.reply_to(
         message,
-        f"⚠️ Deposits and withdrawals are processed by @mrpuppyx , Pls contact him for deposit and withdraw — {CASINO_NAME} runs on manual deposit and withdraw no automatic system right now.",
+        f"⚠️ Deposits and withdrawals are processed by @mrpuppyx , pls contact him to deposit and withdraw — {CASINO_NAME} runs on manual work, no automation rightnow.",
     )
 
 
@@ -106,10 +108,10 @@ def cmd_rakeback(message):
         bot.reply_to(message, "No rakeback available yet — play a bit more first!")
         return
     new_balance = adjust_balance(message.from_user.id, rakeback)
-    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} coins\nBalance: {new_balance}")
+    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} ruppess\nBalance: {new_balance}")
 
 
-@bot.message_handler(commands=["housebal", "house" , "hb" ])
+@bot.message_handler(commands=["housebal", "house" , "hb"])
 def cmd_housebal(message):
     bal = get_house_balance()
     bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: ₹{bal} ")
@@ -140,7 +142,7 @@ def cmd_leaderboard(message):
 
 
 # ---------- Tip ----------
-@bot.message_handler(commands=["tip"])
+@bot.message_handler(commands=["tip" , "send" ])
 def cmd_tip(message):
     ensure_user(message)
     parts = message.text.split()
@@ -188,7 +190,7 @@ def cmd_tip(message):
 
 
 # ---------- Games ----------
-@bot.message_handler(commands=["cf" , "coinflip" ])
+@bot.message_handler(commands=["coinflip" , "cf"])
 def cmd_cf(message):
     ensure_user(message)
     if not is_game_enabled("cf"):
@@ -296,7 +298,7 @@ def cmd_add(message):
     get_or_create_user(target_id, None)
     new_balance = adjust_balance(target_id, amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added {amount} ruppess\nUser: {target_id}\nNew balance: {new_balance}")
+    bot.reply_to(message, f"✅ Added ₹{amount} \nUser: {target_id}\nNew balance: {new_balance}")
 
 
 @bot.message_handler(commands=["deduct"])
@@ -327,7 +329,7 @@ def cmd_deduct(message):
         return
     new_balance = adjust_balance(target_id, -amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted {amount} rupees\nUser: {target_id}\nBalance: {new_balance}")
+    bot.reply_to(message, f"✅ Deducted ₹{amount} \nUser: {target_id}\nBalance: {new_balance}")
 
 
 # ---------- Admin: promote/demote ----------
@@ -374,7 +376,7 @@ def cmd_updatehb(message):
     amount = float(parts[1])
     update("house", {"id": 1}, {"balance": amount})
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "updatehb", "amount": amount})
-    bot.reply_to(message, f"🏦 House balance set to ₹{amount}.")
+    bot.reply_to(message, f"🏦 House balance set to {amount}.")
 
 
 # ---------- Admin: rain ----------
@@ -425,7 +427,7 @@ def cmd_rain(message):
                 adjust_balance(uid, share)
             bot.send_message(
                 rain["chat_id"],
-                f"🌧️ Rain of {rain['amount']} coins ended!\n{share} ruppess each to {len(participants)} users. 🎉",
+                f"🌧️ Rain of {rain['amount']} ruppess ended!\n{share} ruppess each to {len(participants)} users. 🎉",
             )
         try:
             bot.unpin_chat_message(rain["chat_id"], sent.message_id)
@@ -458,11 +460,14 @@ def handle_rain_join(call):
     bot.answer_callback_query(call.id, "You joined the rain! 🌧️")
 
 
-# ---------- Dice Duel (vs bot or vs player) ----------
-def parse_dice_command(text: str):
-    """Returns (amount_str, code, opponent_username) from the raw command text, any order."""
+# ---------- Dice Duel (vs bot or vs player, real Telegram dice) ----------
+CASINO_LABEL = "The Casino"
+
+
+def parse_dice_command(text: str, reply_msg):
+    """Returns (amount_str, code_or_None, opponent_id_or_None, opponent_name_or_None)."""
     tokens = text.split()[1:]
-    amount_str, code, opponent_username = None, "1d1w", None
+    amount_str, code, opponent_username = None, None, None
     for tok in tokens:
         if tok.startswith("@"):
             opponent_username = tok[1:]
@@ -470,16 +475,106 @@ def parse_dice_command(text: str):
             code = tok.lower()
         elif amount_str is None:
             amount_str = tok
-    return amount_str, code, opponent_username
+
+    opponent_id, opponent_name = None, None
+    if reply_msg:
+        opponent_id = reply_msg.from_user.id
+        opponent_name = reply_msg.from_user.username or reply_msg.from_user.first_name
+        get_or_create_user(opponent_id, reply_msg.from_user.username)
+    elif opponent_username:
+        opponent = select("users", filters={"username": opponent_username}, single=True)
+        if opponent:
+            opponent_id = int(opponent["telegram_id"])
+            opponent_name = opponent_username
+
+    return amount_str, code, opponent_username, opponent_id, opponent_name
 
 
-def build_mode_keyboard(match_id: str):
+def rounds_keyboard(setup_id):
+    markup = InlineKeyboardMarkup()
+    markup.row(*[InlineKeyboardButton(str(n), callback_data=f"dround:{setup_id}:{n}") for n in (1, 2, 3)])
+    return markup
+
+
+def rolls_keyboard(setup_id):
+    markup = InlineKeyboardMarkup()
+    markup.row(*[InlineKeyboardButton(str(n), callback_data=f"droll:{setup_id}:{n}") for n in (1, 2, 3)])
+    return markup
+
+
+def mode_keyboard(setup_id):
     markup = InlineKeyboardMarkup()
     markup.row(
-        InlineKeyboardButton("Normal (highest sum wins)", callback_data=f"dmode:{match_id}:normal"),
-        InlineKeyboardButton("Crazy (lowest sum wins)", callback_data=f"dmode:{match_id}:crazy"),
+        InlineKeyboardButton("Normal (highest sum wins)", callback_data=f"dsmode:{setup_id}:normal"),
+        InlineKeyboardButton("Crazy (lowest sum wins)", callback_data=f"dsmode:{setup_id}:crazy"),
     )
     return markup
+
+
+def advance_setup(setup_id):
+    setup = dice_setups.get(setup_id)
+    if setup is None:
+        return
+    chat_id = setup["chat_id"]
+    if setup["rounds"] is None:
+        bot.send_message(chat_id, "🎲 How many rounds?", reply_markup=rounds_keyboard(setup_id))
+    elif setup["dice_count"] is None:
+        bot.send_message(chat_id, "🎲 How many dice per round?", reply_markup=rolls_keyboard(setup_id))
+    elif setup["mode"] is None:
+        bot.send_message(chat_id, "🎲 Choose your game mode:", reply_markup=mode_keyboard(setup_id))
+    else:
+        finalize_setup(setup_id)
+
+
+def finalize_setup(setup_id):
+    setup = dice_setups.pop(setup_id, None)
+    if setup is None:
+        return
+    chat_id = setup["chat_id"]
+
+    if setup["opponent_id"] is None:
+        amount = resolve_amount(setup["initiator_id"], setup["amount_str"])
+        if amount is None:
+            bot.send_message(chat_id, "Amount must be a number, 'all', or 'half'.")
+            return
+        if amount < DUEL_MIN_BET:
+            bot.send_message(chat_id, f"Minimum bet is {DUEL_MIN_BET} coins.")
+            return
+        if amount > get_balance(setup["initiator_id"]):
+            bot.send_message(chat_id, f"Not enough balance. Your balance: {get_balance(setup['initiator_id'])}")
+            return
+        adjust_balance(setup["initiator_id"], -amount)
+        start_match(
+            chat_id=chat_id,
+            player_a=setup["initiator_id"], player_a_name=setup["initiator_name"], bet_a=amount,
+            player_b=None, player_b_name=CASINO_LABEL, bet_b=0,
+            dice_count=setup["dice_count"], rounds=setup["rounds"], mode=setup["mode"],
+        )
+        return
+
+    # vs player: send challenge, 120s to accept
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("✅ Accept", callback_data=f"daccept:{setup_id}"),
+        InlineKeyboardButton("❌ Decline", callback_data=f"ddecline:{setup_id}"),
+    )
+    dice_setups[setup_id] = setup
+    setup["status"] = "awaiting_accept"
+    bot.send_message(
+        chat_id,
+        f"⚔️ {setup['initiator_name']} challenges {setup['opponent_name']} to a Dice Duel!\n"
+        f"{setup['dice_count']} dice, {setup['rounds']} round(s), {setup['mode']} mode, bet: {setup['amount_str']} coins each.\n"
+        f"{setup['opponent_name']} has 120 seconds to accept.",
+        reply_markup=markup,
+    )
+
+    def expire_setup():
+        d = dice_setups.get(setup_id)
+        if d and d.get("status") == "awaiting_accept":
+            dice_setups.pop(setup_id, None)
+            bot.send_message(d["chat_id"], f"⌛ The challenge to {d['opponent_name']} expired.")
+
+    threading.Timer(120, expire_setup).start()
 
 
 @bot.message_handler(commands=["dice"])
@@ -489,159 +584,267 @@ def cmd_dice(message):
         bot.reply_to(message, "Dice Duel is currently disabled.")
         return
 
-    amount_str, code, opponent_username = parse_dice_command(message.text)
+    amount_str, code, opponent_username, opponent_id, opponent_name = parse_dice_command(message.text, message.reply_to_message)
     if amount_str is None:
-        bot.reply_to(message, "Usage: /dice <amount|all|half> [<dice>d<rounds>w] [@opponent]\nExample: /dice 10 3d1w  or  /dice half @user 2d1w")
+        bot.reply_to(message, "Usage: /dice <amount|all|half> [<dice>d<rounds>w] [@opponent]\nOr reply to someone's message with /dice <amount> [...]")
+        return
+    if opponent_username and opponent_id is None:
+        bot.reply_to(message, f"@{opponent_username} needs to message this bot at least once (e.g. /me) before they can be challenged.")
+        return
+    if opponent_id == message.from_user.id:
+        bot.reply_to(message, "You can't challenge yourself.")
         return
 
-    parsed = parse_dice_code(code)
-    if parsed is None:
-        bot.reply_to(message, "Invalid dice code. Format is <dice>d<rounds>w, e.g. 3d1w (max 5 dice, 9 rounds).")
-        return
-    dice_count, rounds = parsed
-
-    opponent_id = None
-    if opponent_username:
-        opponent = select("users", filters={"username": opponent_username}, single=True)
-        if not opponent:
-            bot.reply_to(message, f"@{opponent_username} needs to message this bot at least once (e.g. /me) before they can be challenged.")
+    dice_count, rounds = (None, None)
+    if code:
+        parsed = parse_dice_code(code)
+        if parsed is None:
+            bot.reply_to(message, "Invalid dice code. Format is <dice>d<rounds>w, e.g. 3d1w (max 3 dice, 3 rounds).")
             return
-        opponent_id = int(opponent["telegram_id"])
-        if opponent_id == message.from_user.id:
-            bot.reply_to(message, "You can't challenge yourself.")
-            return
+        dice_count, rounds = parsed
 
-    match_id = uuid.uuid4().hex[:10]
-    pending_duels[match_id] = {
+    setup_id = uuid.uuid4().hex[:10]
+    dice_setups[setup_id] = {
         "initiator_id": message.from_user.id,
         "initiator_name": message.from_user.username or message.from_user.first_name,
         "amount_str": amount_str,
         "dice_count": dice_count,
         "rounds": rounds,
-        "opponent_id": opponent_id,
-        "opponent_username": opponent_username,
-        "chat_id": message.chat.id,
         "mode": None,
-        "status": "choosing_mode",
+        "opponent_id": opponent_id,
+        "opponent_name": opponent_name,
+        "chat_id": message.chat.id,
+        "status": "setup",
     }
+    advance_setup(setup_id)
 
-    bot.reply_to(message, "🎲 Choose your game mode:", reply_markup=build_mode_keyboard(match_id))
-@bot.callback_query_handler(func=lambda call: call.data.startswith("dmode:"))
-def handle_dice_mode(call):
-    _, match_id, mode = call.data.split(":")
-    duel = pending_duels.get(match_id)
-    if duel is None:
-        bot.answer_callback_query(call.id, "This challenge has expired.")
-        return
-    if call.from_user.id != duel["initiator_id"]:
-        bot.answer_callback_query(call.id, "This isn't your game.")
-        return
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith("dround:"))
+def handle_dround(call):
+    _, setup_id, n = call.data.split(":")
+    setup = dice_setups.get(setup_id)
+    if setup is None or call.from_user.id != setup["initiator_id"]:
+        bot.answer_callback_query(call.id, "Not your setup.")
+        return
     bot.answer_callback_query(call.id)
-    duel["mode"] = mode
+    setup["rounds"] = int(n)
+    advance_setup(setup_id)
 
-    if duel["opponent_id"] is None:
-        # vs bot: resolve amount and play immediately
-        amount = resolve_amount(duel["initiator_id"], duel["amount_str"])
-        if amount is None:
-            bot.send_message(duel["chat_id"], "Amount must be a number, 'all', or 'half'.")
-            pending_duels.pop(match_id, None)
-            return
-        pending_duels.pop(match_id, None)
-        play_vs_bot(bot, duel["chat_id"], duel["initiator_id"], amount, duel["dice_count"], duel["rounds"], mode)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("droll:"))
+def handle_droll(call):
+    _, setup_id, n = call.data.split(":")
+    setup = dice_setups.get(setup_id)
+    if setup is None or call.from_user.id != setup["initiator_id"]:
+        bot.answer_callback_query(call.id, "Not your setup.")
         return
+    bot.answer_callback_query(call.id)
+    setup["dice_count"] = int(n)
+    advance_setup(setup_id)
 
-    # vs player: send challenge with accept/decline, 120s expiry
-    duel["status"] = "awaiting_accept"
-    markup = InlineKeyboardMarkup()
-    markup.row(
-        InlineKeyboardButton("✅ Accept", callback_data=f"daccept:{match_id}"),
-        InlineKeyboardButton("❌ Decline", callback_data=f"ddecline:{match_id}"),
-    )
-    bot.send_message(
-        duel["chat_id"],
-        f"⚔️ {duel['initiator_name']} challenges @{duel['opponent_username']} to a Dice Duel!\n"
-        f"{duel['dice_count']} dice, {duel['rounds']} round(s), {mode} mode, bet: {duel['amount_str']} coins each.\n"
-        f"@{duel['opponent_username']} has 120 seconds to accept.",
-        reply_markup=markup,
-    )
 
-    def expire_duel():
-        d = pending_duels.get(match_id)
-        if d and d["status"] == "awaiting_accept":
-            pending_duels.pop(match_id, None)
-            bot.send_message(d["chat_id"], f"⌛ The challenge to @{d['opponent_username']} expired.")
-
-    threading.Timer(120, expire_duel).start()
+@bot.callback_query_handler(func=lambda call: call.data.startswith("dsmode:"))
+def handle_dsmode(call):
+    _, setup_id, mode = call.data.split(":")
+    setup = dice_setups.get(setup_id)
+    if setup is None or call.from_user.id != setup["initiator_id"]:
+        bot.answer_callback_query(call.id, "Not your setup.")
+        return
+    bot.answer_callback_query(call.id)
+    setup["mode"] = mode
+    advance_setup(setup_id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("daccept:") or call.data.startswith("ddecline:"))
 def handle_dice_response(call):
-    action, match_id = call.data.split(":")
-    duel = pending_duels.get(match_id)
-    if duel is None or duel["status"] != "awaiting_accept":
+    action, setup_id = call.data.split(":")
+    setup = dice_setups.get(setup_id)
+    if setup is None or setup.get("status") != "awaiting_accept":
         bot.answer_callback_query(call.id, "This challenge is no longer active.")
         return
-    if call.from_user.id != duel["opponent_id"]:
+    if call.from_user.id != setup["opponent_id"]:
         bot.answer_callback_query(call.id, "This challenge isn't for you.")
         return
 
     if action == "ddecline":
-        pending_duels.pop(match_id, None)
+        dice_setups.pop(setup_id, None)
         bot.answer_callback_query(call.id, "Challenge declined.")
-        bot.send_message(duel["chat_id"], f"❌ @{duel['opponent_username']} declined the challenge.")
+        bot.send_message(setup["chat_id"], f"❌ {setup['opponent_name']} declined the challenge.")
         return
 
     bot.answer_callback_query(call.id)
-    pending_duels.pop(match_id, None)
+    dice_setups.pop(setup_id, None)
 
-    initiator_id, opponent_id = duel["initiator_id"], duel["opponent_id"]
-    initiator_amount = resolve_amount(initiator_id, duel["amount_str"])
-    opponent_amount = resolve_amount(opponent_id, duel["amount_str"])
+    initiator_id, opponent_id = setup["initiator_id"], setup["opponent_id"]
+    initiator_amount = resolve_amount(initiator_id, setup["amount_str"])
+    opponent_amount = resolve_amount(opponent_id, setup["amount_str"])
 
     if initiator_amount is None or opponent_amount is None:
-        bot.send_message(duel["chat_id"], "Amount must be a number, 'all', or 'half'.")
+        bot.send_message(setup["chat_id"], "Amount must be a number, 'all', or 'half'.")
         return
     if initiator_amount < DUEL_MIN_BET or opponent_amount < DUEL_MIN_BET:
-        bot.send_message(duel["chat_id"], f"Minimum bet is {DUEL_MIN_BET} coins for both players.")
+        bot.send_message(setup["chat_id"], f"Minimum bet is {DUEL_MIN_BET} coins for both players.")
         return
     if initiator_amount > get_balance(initiator_id):
-        bot.send_message(duel["chat_id"], f"{duel['initiator_name']} doesn't have enough balance anymore.")
+        bot.send_message(setup["chat_id"], f"{setup['initiator_name']} doesn't have enough balance anymore.")
         return
     if opponent_amount > get_balance(opponent_id):
-        bot.send_message(duel["chat_id"], f"@{duel['opponent_username']} doesn't have enough balance anymore.")
+        bot.send_message(setup["chat_id"], f"{setup['opponent_name']} doesn't have enough balance anymore.")
         return
 
     adjust_balance(initiator_id, -initiator_amount)
     adjust_balance(opponent_id, -opponent_amount)
 
-    winner, round_log = play_match(duel["dice_count"], duel["rounds"], duel["mode"])
-    pot = initiator_amount + opponent_amount
+    start_match(
+        chat_id=setup["chat_id"],
+        player_a=initiator_id, player_a_name=setup["initiator_name"], bet_a=initiator_amount,
+        player_b=opponent_id, player_b_name=setup["opponent_name"], bet_b=opponent_amount,
+        dice_count=setup["dice_count"], rounds=setup["rounds"], mode=setup["mode"],
+    )
+
+
+def start_match(chat_id, player_a, player_a_name, bet_a, player_b, player_b_name, bet_b, dice_count, rounds, mode):
+    match_id = uuid.uuid4().hex[:10]
+    active_matches[match_id] = {
+        "chat_id": chat_id,
+        "player_a": player_a, "player_a_name": player_a_name, "bet_a": bet_a,
+        "player_b": player_b, "player_b_name": player_b_name, "bet_b": bet_b,
+        "dice_count": dice_count, "rounds": rounds, "mode": mode,
+        "current_round": 1, "a_wins": 0, "b_wins": 0,
+        "a_current": [], "b_current": [],
+    }
+    dice_waiters[(chat_id, player_a)] = match_id
+    if player_b is not None:
+        dice_waiters[(chat_id, player_b)] = match_id
+
+    vs = player_b_name
+    bot.send_message(
+        chat_id,
+        f"⚔️ Dice Duel started! {player_a_name} vs {vs} • {dice_count} dice/round • {rounds} round(s) • {mode} mode\n"
+        f"{player_a_name}, send your 🎲 dice now!",
+    )
+
+
+@bot.message_handler(content_types=["dice"])
+def handle_incoming_dice(message):
+    key = (message.chat.id, message.from_user.id)
+    match_id = dice_waiters.get(key)
+    if match_id is None:
+        return  # not part of an active match, ignore
+    match = active_matches.get(match_id)
+    if match is None:
+        return
+
+    side = "a" if message.from_user.id == match["player_a"] else "b"
+    match[f"{side}_current"].append(message.dice.value)
+
+    remaining = match["dice_count"] - len(match[f"{side}_current"])
+    if remaining > 0:
+        bot.send_message(match["chat_id"], f"Got it! Send {remaining} more dice.")
+        return
+
+    # this side is done for the round
+    if match["player_b"] is None and side == "a":
+        # vs bot: bot auto-rolls its own dice for this round
+        match["b_current"] = [bot.send_dice(match["chat_id"], emoji="🎲").dice.value for _ in range(match["dice_count"])]
+
+    if len(match["a_current"]) == match["dice_count"] and len(match["b_current"]) == match["dice_count"]:
+        resolve_round(match_id)
+    else:
+        waiting_name = match["player_b_name"] if side == "a" else match["player_a_name"]
+        bot.send_message(match["chat_id"], f"Waiting on {waiting_name} to send their dice...")
+
+
+def resolve_round(match_id):
+    match = active_matches.get(match_id)
+    if match is None:
+        return
+    chat_id = match["chat_id"]
+    a_sum, b_sum = sum(match["a_current"]), sum(match["b_current"])
+
+    if a_sum == b_sum:
+        bot.send_message(chat_id, f"Round tied ({a_sum} vs {b_sum})! Reroll this round — send your dice again.")
+        match["a_current"], match["b_current"] = [], []
+        prompt_reroll(match)
+        return
+
+    winner_side = decide_round_winner(a_sum, b_sum, match["mode"])
+    match[f"{winner_side}_wins"] += 1
+    winner_name = match["player_a_name"] if winner_side == "a" else match["player_b_name"]
+
+    bot.send_message(
+        chat_id,
+        f"Round {match['current_round']}: {match['player_a_name']} {match['a_current']} ({a_sum}) vs "
+        f"{match['player_b_name']} {match['b_current']} ({b_sum}) — {winner_name} wins the round!",
+    )
+
+    needed = match["rounds"] // 2 + 1
+    if match["a_wins"] >= needed or match["b_wins"] >= needed:
+        finalize_match(match_id)
+    else:
+        match["current_round"] += 1
+        match["a_current"], match["b_current"] = [], []
+        prompt_reroll(match)
+
+
+def prompt_reroll(match):
+    chat_id = match["chat_id"]
+    if match["player_b"] is None:
+        bot.send_message(chat_id, f"{match['player_a_name']}, send your 🎲 dice for the next round!")
+    else:
+        bot.send_message(chat_id, f"{match['player_a_name']} and {match['player_b_name']}, send your 🎲 dice for the next round!")
+
+
+def finalize_match(match_id):
+    match = active_matches.pop(match_id, None)
+    if match is None:
+        return
+    dice_waiters.pop((match["chat_id"], match["player_a"]), None)
+    if match["player_b"] is not None:
+        dice_waiters.pop((match["chat_id"], match["player_b"]), None)
+
+    winner_side = "a" if match["a_wins"] > match["b_wins"] else "b"
+
+    if match["player_b"] is None:
+        # vs bot
+        won = winner_side == "a"
+        payout = payout_for_50_50(match["bet_a"]) if won else 0
+        if won:
+            adjust_balance(match["player_a"], payout)
+        record_bet(
+            telegram_id=match["player_a"], game="dice_duel_bot", bet_amount=match["bet_a"], payout=payout,
+            result="win" if won else "loss", meta={"mode": match["mode"]},
+        )
+        if won:
+            bot.send_message(match["chat_id"], f"🏆 You won the duel! +{payout} ruppess.\nBalance: {get_balance(match['player_a'])}")
+        else:
+            bot.send_message(match["chat_id"], f"❌ You lost the duel. -{match['bet_a']} ruppees.\nBalance: {get_balance(match['player_a'])}")
+        return
+
+    # PvP: pot with rake
+    pot = match["bet_a"] + match["bet_b"]
     rake = round(pot * HOUSE_EDGE_RAKE, 2)
     winner_payout = round(pot - rake, 2)
-
-    winner_id = initiator_id if winner == "a" else opponent_id
-    loser_id = opponent_id if winner == "a" else initiator_id
-    winner_name = duel["initiator_name"] if winner == "a" else duel["opponent_username"]
+    winner_id = match["player_a"] if winner_side == "a" else match["player_b"]
+    winner_name = match["player_a_name"] if winner_side == "a" else match["player_b_name"]
 
     adjust_balance(winner_id, winner_payout)
-
-    record_bet(telegram_id=initiator_id, game="dice_duel_pvp", bet_amount=initiator_amount,
-               payout=winner_payout if winner == "a" else 0, result="win" if winner == "a" else "loss",
-               meta={"opponent": duel["opponent_username"], "mode": duel["mode"]})
-    record_bet(telegram_id=opponent_id, game="dice_duel_pvp", bet_amount=opponent_amount,
-               payout=winner_payout if winner == "b" else 0, result="win" if winner == "b" else "loss",
-               meta={"opponent": duel["initiator_name"], "mode": duel["mode"]})
+    record_bet(telegram_id=match["player_a"], game="dice_duel_pvp", bet_amount=match["bet_a"],
+               payout=winner_payout if winner_side == "a" else 0, result="win" if winner_side == "a" else "loss",
+               meta={"opponent": match["player_b_name"], "mode": match["mode"]})
+    record_bet(telegram_id=match["player_b"], game="dice_duel_pvp", bet_amount=match["bet_b"],
+               payout=winner_payout if winner_side == "b" else 0, result="win" if winner_side == "b" else "loss",
+               meta={"opponent": match["player_a_name"], "mode": match["mode"]})
 
     house = select("house", filters={"id": 1}, single=True)
     update("house", {"id": 1}, {"balance": float(house["balance"]) + rake})
 
-    text = (
-        f"⚔️ Dice Duel • {duel['mode']} mode\n"
-        + format_match_log(round_log, duel["initiator_name"], duel["opponent_username"])
-        + f"\n\n🏆 {winner_name} wins {winner_payout} rupees!"
-    )
-    bot.send_message(duel["chat_id"], text)
+    bot.send_message(match["chat_id"], f"🏆 {winner_name} wins the duel! +{winner_payout} ruppess.")
+
+
+def payout_for_50_50(bet_amount):
+    from game_math import payout_for
+    return payout_for(bet_amount, 0.5)
 
 
 print(f"{CASINO_NAME} bot running...")
