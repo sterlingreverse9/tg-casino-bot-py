@@ -6,7 +6,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import BOT_TOKEN, CASINO_NAME
 from db import select, insert, update
-from wallet import get_or_create_user, get_balance, adjust_balance, get_house_balance, resolve_amount
+from wallet import get_or_create_user, get_balance, adjust_balance, get_house_balance, resolve_amount, record_bet
 from game_status import is_game_enabled, set_game_enabled
 from games.coinflip import play_coinflip
 from games.dice_roll import play_dice_roll, ALL_CHOICES
@@ -84,18 +84,18 @@ def cmd_me(message):
     )
 
 
-@bot.message_handler(commands=["wallet" , "bal" , "balance" ])
+@bot.message_handler(commands=["wallet"])
 def cmd_wallet(message):
     ensure_user(message)
     balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: ₹{balance} ")
+    bot.reply_to(message, f"💰 Your balance: {balance} coins")
 
 
-@bot.message_handler(commands=["depo", "deposit" , "withdraw"])
+@bot.message_handler(commands=["depo", "withdraw"])
 def cmd_depo_withdraw(message):
     bot.reply_to(
         message,
-        f"⚠️ Deposits and withdrawals are processed by @mrpuppyx , pls contact him to deposit and withdraw — {CASINO_NAME} runs on manual work, no automation rightnow.",
+        f"⚠️ Deposits and withdrawals aren't available — {CASINO_NAME} runs on fun coins only, no real money.",
     )
 
 
@@ -108,13 +108,13 @@ def cmd_rakeback(message):
         bot.reply_to(message, "No rakeback available yet — play a bit more first!")
         return
     new_balance = adjust_balance(message.from_user.id, rakeback)
-    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} ruppess\nBalance: {new_balance}")
+    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} coins\nBalance: {new_balance}")
 
 
-@bot.message_handler(commands=["housebal", "house" , "hb"])
+@bot.message_handler(commands=["housebal", "house"])
 def cmd_housebal(message):
     bal = get_house_balance()
-    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: ₹{bal} ")
+    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: {bal} coins")
 
 
 @bot.message_handler(commands=["history"])
@@ -142,7 +142,7 @@ def cmd_leaderboard(message):
 
 
 # ---------- Tip ----------
-@bot.message_handler(commands=["tip" , "send" ])
+@bot.message_handler(commands=["tip"])
 def cmd_tip(message):
     ensure_user(message)
     parts = message.text.split()
@@ -190,7 +190,7 @@ def cmd_tip(message):
 
 
 # ---------- Games ----------
-@bot.message_handler(commands=["coinflip" , "cf"])
+@bot.message_handler(commands=["cf"])
 def cmd_cf(message):
     ensure_user(message)
     if not is_game_enabled("cf"):
@@ -298,7 +298,7 @@ def cmd_add(message):
     get_or_create_user(target_id, None)
     new_balance = adjust_balance(target_id, amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added ₹{amount} \nUser: {target_id}\nNew balance: {new_balance}")
+    bot.reply_to(message, f"✅ Added {amount} coins\nUser: {target_id}\nNew balance: {new_balance}")
 
 
 @bot.message_handler(commands=["deduct"])
@@ -329,7 +329,7 @@ def cmd_deduct(message):
         return
     new_balance = adjust_balance(target_id, -amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted ₹{amount} \nUser: {target_id}\nBalance: {new_balance}")
+    bot.reply_to(message, f"✅ Deducted {amount} coins\nUser: {target_id}\nBalance: {new_balance}")
 
 
 # ---------- Admin: promote/demote ----------
@@ -427,7 +427,7 @@ def cmd_rain(message):
                 adjust_balance(uid, share)
             bot.send_message(
                 rain["chat_id"],
-                f"🌧️ Rain of {rain['amount']} ruppess ended!\n{share} ruppess each to {len(participants)} users. 🎉",
+                f"🌧️ Rain of {rain['amount']} coins ended!\n{share} coins each to {len(participants)} users. 🎉",
             )
         try:
             bot.unpin_chat_message(rain["chat_id"], sent.message_id)
@@ -530,7 +530,6 @@ def advance_setup(setup_id):
         bot.send_message(chat_id, "🎲 Choose your game mode:", reply_markup=mode_keyboard(setup_id))
     else:
         finalize_setup(setup_id)
-
 
 def finalize_setup(setup_id):
     setup = dice_setups.pop(setup_id, None)
@@ -852,7 +851,7 @@ def forfeit_player(match_id, afk_side):
     half = round(afk_bet / 2, 2)
     to_house = round(afk_bet - half, 2)
 
-    adjust_balance(other_id, other_bet + half)
+    adjust_balance(other_id, other_bet + half)  # refund their own stake + half of the forfeiter's
     house = select("house", filters={"id": 1}, single=True)
     update("house", {"id": 1}, {"balance": float(house["balance"]) + to_house})
 
