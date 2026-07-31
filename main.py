@@ -206,6 +206,25 @@ def cmd_cf(message):
         bot.reply_to(message, "Amount must be a number, 'all', or 'half'.")
         return
     play_coinflip(bot, message, message.from_user.id, bet_amount, parts[2])
+    @bot.message_handler(commands=["limbo"])
+def cmd_limbo(message):
+    ensure_user(message)
+    if not is_game_enabled("limbo"):
+        bot.reply_to(message, "Limbo is currently disabled.")
+        return
+    parts = message.text.split()
+    if len(parts) != 3:
+        bot.reply_to(message, "Usage: /limbo <amount|all|half> <multiplier>\nExample: /limbo 40 6  or  /limbo all 2x")
+        return
+    bet_amount = resolve_amount(message.from_user.id, parts[1])
+    if bet_amount is None:
+        bot.reply_to(message, "Amount must be a number, 'all', or 'half'.")
+        return
+    target_multiplier = parse_multiplier(parts[2])
+    if target_multiplier is None:
+        bot.reply_to(message, "Multiplier must be between 1.01x and 1000x, e.g. 2x or 6.")
+        return
+    play_limbo(bot, message.chat.id, message.from_user.id, bet_amount, target_multiplier)
 
 
 def build_dr_keyboard(telegram_id: int, amount_str: str):
