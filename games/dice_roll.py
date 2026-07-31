@@ -1,5 +1,6 @@
 from wallet import get_balance, adjust_balance, record_bet, get_house_balance
 from game_math import payout_for
+from settings import get_min_bet, get_max_bet
 
 EVEN_MONEY_CHOICES = {
     "high": {4, 5, 6},
@@ -17,8 +18,6 @@ LABELS = {
     "odd": "Odd",
 }
 
-MIN_BET = 10
-
 
 def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: str):
     choice = choice.lower()
@@ -27,14 +26,14 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
         return
 
     balance = get_balance(telegram_id)
-    house_balance = get_house_balance()
-    max_bet = house_balance * 0.05
+    min_bet = get_min_bet()
+    max_bet = get_max_bet(get_house_balance())
 
-    if bet_amount < MIN_BET:
-        bot.send_message(chat_id, f"Minimum bet is {MIN_BET} ruppess.")
+    if bet_amount < min_bet:
+        bot.send_message(chat_id, f"Minimum bet is {min_bet} coins.")
         return
     if bet_amount > max_bet:
-        bot.send_message(chat_id, f"Maximum bet is {round(max_bet, 2)} coins (5% of house balance).")
+        bot.send_message(chat_id, f"Maximum bet is {round(max_bet, 2)} coins.")
         return
     if bet_amount > balance:
         bot.send_message(chat_id, f"Not enough balance. Your balance: {balance}")
@@ -71,10 +70,10 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
     if won:
         bot.send_message(
             chat_id,
-            f"🎲 Rolled {roll}!\nYou bet on {label}\n✅ You won {payout} ruppess!\nBalance: {new_balance}",
+            f"🎲 Rolled {roll}!\nYou bet on {label}\n✅ You won {payout} coins!\nBalance: {new_balance}",
         )
     else:
         bot.send_message(
             chat_id,
-            f"🎲 Rolled {roll}!\nYou bet on {label}\n❌ You lost {bet_amount} ruppess.\nBalance: {new_balance}",
+            f"🎲 Rolled {roll}!\nYou bet on {label}\n❌ You lost {bet_amount} coins.\nBalance: {new_balance}",
         )
