@@ -8,10 +8,12 @@ from config import BOT_TOKEN, CASINO_NAME
 from db import select, insert, update
 from wallet import get_or_create_user, get_balance, adjust_balance, get_house_balance, resolve_amount, record_bet
 from game_status import is_game_enabled, set_game_enabled
+from settings import get_min_bet, set_min_bet, get_max_bet, set_max_bet, get_house_edge, set_house_edge
 from games.coinflip import play_coinflip
 from games.dice_roll import play_dice_roll, ALL_CHOICES
 from games.limbo import play_limbo, parse_multiplier
-from games.dice_duel import parse_dice_code, decide_round_winner, MIN_BET as DUEL_MIN_BET
+from games.dice_duel import parse_dice_code, decide_round_winner
+from games.tower import DIFFICULTY_CONFIG, TOTAL_FLOORS, generate_floor, floor_multiplier
 from middleware.admin import is_admin
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -19,7 +21,15 @@ active_rains = {}  # message_id -> {"amount", "chat_id", "participants": set()}
 dice_setups = {}  # setup_id -> in-progress wizard state
 active_matches = {}  # match_id -> live match state
 dice_waiters = {}  # (chat_id, telegram_id) -> match_id
+tower_setups = {}  # setup_id -> pending tower game awaiting difficulty
+active_towers = {}  # (chat_id, telegram_id) -> live tower game state
 HOUSE_EDGE_RAKE = 0.10
+PROMO_TAG = "@thecassinobot"
+
+
+def has_promo_tag(user):
+    name = f"{user.first_name or ''} {user.last_name or ''}".lower()
+    return PROMO_TAG.lower() in name
 
 
 def ensure_user(message):
@@ -104,12 +114,17 @@ def cmd_depo_withdraw(message):
 def cmd_rakeback(message):
     ensure_user(message)
     user = select("users", filters={"telegram_id": message.from_user.id}, single=True)
-    rakeback = round(float(user["total_lost"]) * 0.005, 2)
+    rate = 0.01 if has_promo_tag(message.from_user) else 0.005
+    rakeback = round(float(user["total_lost"]) * rate, 2)
     if rakeback <= 0:
         bot.reply_to(message, "No rakeback available yet — play a bit more first!")
         return
     new_balance = adjust_balance(message.from_user.id, rakeback)
-    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} coins\nBalance: {new_balance}")
+    if rate == 0.01:
+        note = f"(1% rate — thanks for having {PROMO_TAG} in your name!)"
+    else:
+        note = f"(0.5% rate — add {PROMO_TAG} to your name for 1%!)"
+    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} coins {note}\nBalance: {new_balance}")
 
 
 @bot.message_handler(commands=["housebal", "house"])
@@ -401,6 +416,65 @@ def cmd_updatehb(message):
     bot.reply_to(message, f"🏦 House balance set to {amount}.")
 
 
+@bot.message_handler(commands=["minbet"])
+def cmd_minbet(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    parts = message.text.split()
+    if len(parts) != 2:
+        bot.reply_to(message, "Usage: /minbet <amount>")
+        return
+    try:
+        amt = float(parts[1])
+    except ValueError:
+        bot.reply_to(message, "Amount must be a number.")
+        return
+    set_min_bet(amt)
+    bot.reply_to(message, f"✅ Minimum bet set to {amt} coins.")
+
+
+@bot.message_handler(commands=["maxbet"])
+def cmd_maxbet(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    parts = message.text.split()
+    if len(parts) != 2:
+        bot.reply_to(message, "Usage: /maxbet <amount> or /maxbet <percent>%\nExample: /maxbet 100  or  /maxbet 5%")
+        return
+    raw = parts[1]
+    try:
+        float(raw.rstrip("%"))
+    except ValueError:
+        bot.reply_to(message, "Invalid value. Use a number or a percent like 5%.")
+        return
+    set_max_bet(raw)
+    label = raw if raw.endswith("%") else f"{raw} coins"
+    bot.reply_to(message, f"✅ Maximum bet set to {label}.")
+
+
+@bot.message_handler(commands=["sethousedge"])
+def cmd_sethousedge(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    parts = message.text.split()
+    if len(parts) != 2:
+        bot.reply_to(message, "Usage: /sethousedge <value>\nExample: /sethousedge .10  (10% edge)")
+        return
+    try:
+        val = float(parts[1])
+    except ValueError:
+        bot.reply_to(message, "Value must be a number, e.g. .10 for 10%.")
+        return
+    if val < 0 or val >= 1:
+        bot.reply_to(message, "House edge must be between 0 and 1 (e.g. .10 = 10%).")
+        return
+    set_house_edge(val)
+    bot.reply_to(message, f"✅ House edge set to {val} ({val * 100:.1f}%). Applies to all games immediately.")
+
+
 # ---------- Admin: rain ----------
 MIN_WAGERED_FOR_RAIN = 1000
 
@@ -442,6 +516,16 @@ def cmd_rain(message):
             return
         participants = rain["participants"]
         if not participants:
+            pass
+
+    active_rains[sent.message_id] = {"amount": amount, "chat_id": sent.chat.id, "participants": set()}
+
+    def finish_rain():
+        rain = active_rains.pop(sent.message_id, None)
+        if rain is None:
+            return
+        participants = rain["participants"]
+        if not participants:
             bot.send_message(rain["chat_id"], "🌧️ Rain ended — nobody joined.")
         else:
             share = round(rain["amount"] / len(participants), 2)
@@ -456,7 +540,9 @@ def cmd_rain(message):
         except Exception:
             pass
 
-    threading.Timer(seconds, finish_rain).start()
+    rain_timer = threading.Timer(seconds, finish_rain)
+    active_rains[sent.message_id]["timer"] = rain_timer
+    rain_timer.start()
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("rainjoin:"))
@@ -469,6 +555,11 @@ def handle_rain_join(call):
 
     user_id = call.from_user.id
     get_or_create_user(user_id, call.from_user.username)
+
+    if not has_promo_tag(call.from_user):
+        bot.answer_callback_query(call.id, f"Add {PROMO_TAG} to your Telegram name to join rains!", show_alert=True)
+        return
+
     user = select("users", filters={"telegram_id": user_id}, single=True)
 
     if float(user.get("total_wagered", 0)) < MIN_WAGERED_FOR_RAIN:
@@ -480,6 +571,27 @@ def handle_rain_join(call):
 
     rain["participants"].add(user_id)
     bot.answer_callback_query(call.id, "You joined the rain! 🌧️")
+
+
+@bot.message_handler(commands=["cancelrain"])
+def cmd_cancelrain(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    cancelled = 0
+    for msg_id, rain in list(active_rains.items()):
+        if rain["chat_id"] == message.chat.id:
+            rain["timer"].cancel()
+            active_rains.pop(msg_id, None)
+            try:
+                bot.unpin_chat_message(rain["chat_id"], msg_id)
+            except Exception:
+                pass
+            cancelled += 1
+    if cancelled:
+        bot.reply_to(message, f"🚫 Cancelled {cancelled} ongoing rain(s). No coins were distributed.")
+    else:
+        bot.reply_to(message, "No ongoing rain in this chat.")
 
 
 # ---------- Dice Duel (vs bot or vs player, real Telegram dice) ----------
@@ -565,8 +677,8 @@ def finalize_setup(setup_id):
         if amount is None:
             bot.send_message(chat_id, "Amount must be a number, 'all', or 'half'.")
             return
-        if amount < DUEL_MIN_BET:
-            bot.send_message(chat_id, f"Minimum bet is {DUEL_MIN_BET} coins.")
+        if amount < get_min_bet():
+            bot.send_message(chat_id, f"Minimum bet is {get_min_bet()} coins.")
             return
         if amount > get_balance(setup["initiator_id"]):
             bot.send_message(chat_id, f"Not enough balance. Your balance: {get_balance(setup['initiator_id'])}")
@@ -709,8 +821,8 @@ def handle_dice_response(call):
     if initiator_amount is None or opponent_amount is None:
         bot.send_message(setup["chat_id"], "Amount must be a number, 'all', or 'half'.")
         return
-    if initiator_amount < DUEL_MIN_BET or opponent_amount < DUEL_MIN_BET:
-        bot.send_message(setup["chat_id"], f"Minimum bet is {DUEL_MIN_BET} coins for both players.")
+    if initiator_amount < get_min_bet() or opponent_amount < get_min_bet():
+        bot.send_message(setup["chat_id"], f"Minimum bet is {get_min_bet()} coins for both players.")
         return
     if initiator_amount > get_balance(initiator_id):
         bot.send_message(setup["chat_id"], f"{setup['initiator_name']} doesn't have enough balance anymore.")
@@ -950,6 +1062,208 @@ def payout_for_50_50(bet_amount):
     return payout_for(bet_amount, 0.5)
 
 
+# ---------- Tower ----------
+def tower_difficulty_keyboard(setup_id: str):
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("🟢 Easy", callback_data=f"twrdiff:{setup_id}:easy"),
+        InlineKeyboardButton("🟡 Medium", callback_data=f"twrdiff:{setup_id}:medium"),
+        InlineKeyboardButton("🔴 Hard", callback_data=f"twrdiff:{setup_id}:hard"),
+    )
+    markup.row(InlineKeyboardButton("❌ Cancel", callback_data=f"twrcancel:{setup_id}"))
+    return markup
+
+
+def tower_floor_keyboard(telegram_id: int, chat_id: int, num_tiles: int, show_cashout: bool):
+    markup = InlineKeyboardMarkup()
+    markup.row(*[
+        InlineKeyboardButton(f"🎁 {i + 1}", callback_data=f"twr:{telegram_id}:{chat_id}:{i}")
+        for i in range(num_tiles)
+    ])
+    if show_cashout:
+        markup.row(InlineKeyboardButton("💰 Cashout", callback_data=f"twrcash:{telegram_id}:{chat_id}"))
+    return markup
+
+
+@bot.message_handler(commands=["tower"])
+def cmd_tower(message):
+    ensure_user(message)
+    if not is_game_enabled("tower"):
+        bot.reply_to(message, "Tower is currently disabled.")
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "Usage: /tower <amount|all|half> [easy|medium|hard]")
+        return
+
+    bet_amount = resolve_amount(message.from_user.id, parts[1])
+    if bet_amount is None:
+        bot.reply_to(message, "Amount must be a number, 'all', or 'half'.")
+        return
+
+    min_bet = get_min_bet()
+    max_bet = get_max_bet(get_house_balance())
+    if bet_amount < min_bet:
+        bot.reply_to(message, f"Minimum bet is {min_bet} coins.")
+        return
+    if bet_amount > max_bet:
+        bot.reply_to(message, f"Maximum bet is {round(max_bet, 2)} coins.")
+        return
+    if bet_amount > get_balance(message.from_user.id):
+        bot.reply_to(message, f"Not enough balance. Your balance: {get_balance(message.from_user.id)}")
+        return
+
+    setup_id = uuid.uuid4().hex[:10]
+    tower_setups[setup_id] = {
+        "telegram_id": message.from_user.id,
+        "chat_id": message.chat.id,
+        "bet_amount": bet_amount,
+    }
+
+    if len(parts) >= 3 and parts[2].lower() in DIFFICULTY_CONFIG:
+        start_tower(setup_id, parts[2].lower())
+    else:
+        bot.reply_to(message, "🏗️ Choose difficulty:", reply_markup=tower_difficulty_keyboard(setup_id))
+
+
+def start_tower(setup_id: str, difficulty: str):
+    setup = tower_setups.pop(setup_id, None)
+    if setup is None:
+        return
+    telegram_id, chat_id, bet_amount = setup["telegram_id"], setup["chat_id"], setup["bet_amount"]
+
+    if bet_amount > get_balance(telegram_id):
+        bot.send_message(chat_id, "Not enough balance anymore.")
+        return
+
+    adjust_balance(telegram_id, -bet_amount)
+    key = (chat_id, telegram_id)
+    active_towers[key] = {
+        "bet_amount": bet_amount,
+        "difficulty": difficulty,
+        "current_floor": 0,
+        "tiles": generate_floor(difficulty),
+    }
+
+    tiles_count = DIFFICULTY_CONFIG[difficulty]["tiles"]
+    bot.send_message(
+        chat_id,
+        f"🏗️ Tower ({difficulty}) started! Bet: {bet_amount} coins\nFloor 1/{TOTAL_FLOORS} — pick a tile:",
+        reply_markup=tower_floor_keyboard(telegram_id, chat_id, tiles_count, show_cashout=False),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("twrdiff:"))
+def handle_tower_difficulty(call):
+    _, setup_id, difficulty = call.data.split(":")
+    setup = tower_setups.get(setup_id)
+    if setup is None or call.from_user.id != setup["telegram_id"]:
+        bot.answer_callback_query(call.id, "Not your game.")
+        return
+    bot.answer_callback_query(call.id)
+    start_tower(setup_id, difficulty)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("twrcancel:"))
+def handle_tower_cancel(call):
+    setup_id = call.data.split(":")[1]
+    setup = tower_setups.get(setup_id)
+    if setup is None or call.from_user.id != setup["telegram_id"]:
+        bot.answer_callback_query(call.id, "Not your game.")
+        return
+    tower_setups.pop(setup_id, None)
+    bot.answer_callback_query(call.id, "Cancelled.")
+    bot.send_message(setup["chat_id"], "❌ Tower game cancelled. No coins were deducted.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("twr:"))
+def handle_tower_tile(call):
+    _, tid_str, cid_str, idx_str = call.data.split(":")
+    telegram_id, chat_id, idx = int(tid_str), int(cid_str), int(idx_str)
+
+    if call.from_user.id != telegram_id:
+        bot.answer_callback_query(call.id, "Not your game.")
+        return
+
+    key = (chat_id, telegram_id)
+    tower = active_towers.get(key)
+    if tower is None:
+        bot.answer_callback_query(call.id, "No active tower game.")
+        return
+
+    bot.answer_callback_query(call.id)
+    tile_result = tower["tiles"][idx]
+
+    if tile_result == "bomb":
+        active_towers.pop(key, None)
+        record_bet(
+            telegram_id=telegram_id, game="tower", bet_amount=tower["bet_amount"], payout=0, result="loss",
+            meta={"difficulty": tower["difficulty"], "floor_reached": tower["current_floor"]},
+        )
+        bot.send_message(
+            chat_id,
+            f"💥 Boom! You hit a bomb on floor {tower['current_floor'] + 1}.\n"
+            f"Lost {tower['bet_amount']} coins.\nBalance: {get_balance(telegram_id)}",
+        )
+        return
+
+    tower["current_floor"] += 1
+    mult = floor_multiplier(tower["difficulty"], tower["current_floor"])
+
+    if tower["current_floor"] >= TOTAL_FLOORS:
+        payout = round(tower["bet_amount"] * mult, 2)
+        adjust_balance(telegram_id, payout)
+        record_bet(
+            telegram_id=telegram_id, game="tower", bet_amount=tower["bet_amount"], payout=payout, result="win",
+            meta={"difficulty": tower["difficulty"], "floor_reached": tower["current_floor"]},
+        )
+        active_towers.pop(key, None)
+        bot.send_message(
+            chat_id,
+            f"🏆 You reached the top! Floor {TOTAL_FLOORS}/{TOTAL_FLOORS} • {mult}x\n"
+            f"✅ Won {payout} coins!\nBalance: {get_balance(telegram_id)}",
+        )
+        return
+
+    tower["tiles"] = generate_floor(tower["difficulty"])
+    tiles_count = DIFFICULTY_CONFIG[tower["difficulty"]]["tiles"]
+    bot.send_message(
+        chat_id,
+        f"✅ Safe! Floor {tower['current_floor']}/{TOTAL_FLOORS} cleared • {mult}x\n"
+        f"Floor {tower['current_floor'] + 1}/{TOTAL_FLOORS} — pick a tile:",
+        reply_markup=tower_floor_keyboard(telegram_id, chat_id, tiles_count, show_cashout=True),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("twrcash:"))
+def handle_tower_cashout(call):
+    _, tid_str, cid_str = call.data.split(":")
+    telegram_id, chat_id = int(tid_str), int(cid_str)
+
+    if call.from_user.id != telegram_id:
+        bot.answer_callback_query(call.id, "Not your game.")
+        return
+
+    key = (chat_id, telegram_id)
+    tower = active_towers.pop(key, None)
+    if tower is None:
+        bot.answer_callback_query(call.id, "No active tower game.")
+        return
+
+    bot.answer_callback_query(call.id)
+    mult = floor_multiplier(tower["difficulty"], tower["current_floor"])
+    payout = round(tower["bet_amount"] * mult, 2)
+    adjust_balance(telegram_id, payout)
+    record_bet(
+        telegram_id=telegram_id, game="tower", bet_amount=tower["bet_amount"], payout=payout, result="win",
+        meta={"difficulty": tower["difficulty"], "floor_reached": tower["current_floor"]},
+    )
+    bot.send_message(
+        chat_id,
+        f"💰 Cashed out at floor {tower['current_floor']}/{TOTAL_FLOORS} • {mult}x\n"
+        f"✅ Won {payout} coins!\nBalance: {get_balance(telegram_id)}",
+    )
+
+
 print(f"{CASINO_NAME} bot running...")
 bot.infinity_polling()
-
