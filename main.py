@@ -1278,6 +1278,15 @@ def handle_tower_cashout(call):
         f"✅ Won {payout} rupess!\nBalance: {get_balance(telegram_id)}",
     )
 
+@bot.callback_query_handler(func=lambda call: call.data in ["deposit", "withdraw"])
+def wallet_buttons(call):
+    bot.answer_callback_query(call.id)
+
+    if call.data == "deposit":
+        cmd_depo_withdraw(call.message)
+
+    elif call.data == "withdraw":
+        cmd_depo_withdraw(call.message)
 
 print(f"{CASINO_NAME} bot running...")
 bot.infinity_polling()
