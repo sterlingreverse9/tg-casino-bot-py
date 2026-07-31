@@ -1346,6 +1346,56 @@ def wallet_buttons(call):
 
     elif call.data == "withdraw":
         cmd_depo_withdraw(call.message)
+@bot.message_handler(func=lambda m: m.chat.type == "private")
+def deposit_flow(message):
+
+    state = deposit_states.get(message.from_user.id)
+
+    if not state:
+        return
+
+    if state["step"] == "amount":
+
+        try:
+            amount = float(message.text)
+        except:
+            bot.reply_to(message, "❌ Please enter a valid amount.")
+            return
+
+        if amount < 50:
+            bot.reply_to(message, "❌ Minimum deposit is ₹50.")
+            return
+
+        create_deposit(
+            message.from_user.id,
+            message.from_user.username,
+            amount
+        )
+
+        state["amount"] = amount
+        state["step"] = "paid"
+
+        markup = InlineKeyboardMarkup()
+
+        markup.add(
+            InlineKeyboardButton(
+                "✅ I Have Paid",
+                callback_data="deposit_paid"
+            )
+        )
+
+        bot.send_photo(
+            message.chat.id,
+            open("qr.jpg", "rb"),
+            caption=(
+                f"💰 Deposit Amount: ₹{amount}\n\n"
+                f"UPI ID:\n"
+                f"`piyushraao@fam`\n\n"
+                f"Scan the QR or pay using the UPI ID above."
+            ),
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
 
 print(f"{CASINO_NAME} bot running...")
 bot.infinity_polling()
