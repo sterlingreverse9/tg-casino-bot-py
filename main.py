@@ -1381,6 +1381,54 @@ def deposit_flow(message):
             "📷 Now send the payment screenshot."
         )
         return
+    if state["step"] == "screenshot":
+
+        if not message.photo:
+            bot.reply_to(
+                message,
+                "❌ Please send the payment screenshot as an image."
+            )
+            return
+
+        dep = get_pending_deposit(message.from_user.id)
+
+        if not dep:
+            bot.reply_to(message, "Deposit session expired.")
+            return
+
+        file_id = message.photo[-1].file_id
+
+        save_screenshot(dep["id"], file_id)
+
+        deposit_states.pop(message.from_user.id, None)
+
+        bot.reply_to(
+            message,
+            "✅ Deposit request submitted!\n\n"
+            "Your payment will be verified by an admin shortly."
+        )
+
+        # Notify all admins
+        admins = select("users", filters={"is_admin": True})
+
+        for admin in admins:
+            try:
+                bot.send_photo(
+                    admin["telegram_id"],
+                    file_id,
+                    caption=(
+                        "💰 *New Deposit Request*\n\n"
+                        f"👤 User: @{message.from_user.username or 'No Username'}\n"
+                        f"🆔 ID: {message.from_user.id}\n"
+                        f"💵 Amount: ₹{dep['amount']}\n"
+                        f"🏦 UTR: {dep['utr']}"
+                    ),
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
+
+        return
 
     # Waiting for deposit amount
     if state["step"] == "amount":
