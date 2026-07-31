@@ -95,18 +95,18 @@ def cmd_me(message):
     )
 
 
-@bot.message_handler(commands=["wallet"])
+@bot.message_handler(commands=["wallet" , "bal" , "balance" ])
 def cmd_wallet(message):
     ensure_user(message)
     balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: {balance} coins")
+    bot.reply_to(message, f"💰 Your balance: ₹{balance} ")
 
 
-@bot.message_handler(commands=["depo", "withdraw"])
+@bot.message_handler(commands=["depo","deposit" , "withdraw"])
 def cmd_depo_withdraw(message):
     bot.reply_to(
         message,
-        f"⚠️ Deposits and withdrawals aren't available — {CASINO_NAME} runs on fun coins only, no real money.",
+        f"⚠️ Deposits and withdrawals are processed by @mrpuppyx . Contact him to deposit or withdraw — {CASINO_NAME} runs on manual transactions only, no automation right now.",
     )
 
 
@@ -124,13 +124,13 @@ def cmd_rakeback(message):
         note = f"(1% rate — thanks for having {PROMO_TAG} in your name!)"
     else:
         note = f"(0.5% rate — add {PROMO_TAG} to your name for 1%!)"
-    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} coins {note}\nBalance: {new_balance}")
+    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} rupees {note}\nBalance: {new_balance}")
 
 
-@bot.message_handler(commands=["housebal", "house"])
+@bot.message_handler(commands=["housebal", "house" , "hb" ])
 def cmd_housebal(message):
     bal = get_house_balance()
-    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: {bal} coins")
+    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: {bal} rupees")
 
 
 @bot.message_handler(commands=["history"])
@@ -153,12 +153,12 @@ def cmd_history(message):
 @bot.message_handler(commands=["leaderboard", "ld"])
 def cmd_leaderboard(message):
     top = select("users", order="total_won", desc=True, limit=10)
-    lines = [f"{i+1}. {u['username'] or 'Anonymous'} — {u['total_won']} coins won" for i, u in enumerate(top)]
+    lines = [f"{i+1}. {u['username'] or 'Anonymous'} — {u['total_won']} rupees won" for i, u in enumerate(top)]
     bot.reply_to(message, f"🏆 {CASINO_NAME} Leaderboard:\n" + "\n".join(lines))
 
 
 # ---------- Tip ----------
-@bot.message_handler(commands=["tip"])
+@bot.message_handler(commands=["tip" , "send" ])
 def cmd_tip(message):
     ensure_user(message)
     parts = message.text.split()
@@ -335,7 +335,7 @@ def cmd_add(message):
     get_or_create_user(target_id, None)
     new_balance = adjust_balance(target_id, amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added {amount} coins\nUser: {target_id}\nNew balance: {new_balance}")
+    bot.reply_to(message, f"✅ Added ₹{amount} \nUser: {target_id}\nNew balance: {new_balance}")
 
 
 @bot.message_handler(commands=["deduct"])
@@ -366,7 +366,7 @@ def cmd_deduct(message):
         return
     new_balance = adjust_balance(target_id, -amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted {amount} coins\nUser: {target_id}\nBalance: {new_balance}")
+    bot.reply_to(message, f"✅ Deducted ₹{amount} \nUser: {target_id}\nBalance: {new_balance}")
 
 
 # ---------- Admin: promote/demote ----------
@@ -431,7 +431,7 @@ def cmd_minbet(message):
         bot.reply_to(message, "Amount must be a number.")
         return
     set_min_bet(amt)
-    bot.reply_to(message, f"✅ Minimum bet set to {amt} coins.")
+    bot.reply_to(message, f"✅ Minimum bet set to ₹{amt} .")
 
 
 @bot.message_handler(commands=["maxbet"])
@@ -1022,9 +1022,9 @@ def finalize_match(match_id):
             result="win" if won else "loss", meta={"mode": match["mode"]},
         )
         outcome = (
-            f"🏆 You won the duel! +{payout} coins.\nBalance: {get_balance(match['player_a'])}"
+            f"🏆 You won the duel! +{payout} rupess.\nBalance: {get_balance(match['player_a'])}"
             if won else
-            f"❌ You lost the duel. -{match['bet_a']} coins.\nBalance: {get_balance(match['player_a'])}"
+            f"❌ You lost the duel. -{match['bet_a']} rupess.\nBalance: {get_balance(match['player_a'])}"
         )
         bot.send_message(match["chat_id"], f"📋 Match Summary:\n{summary}\n\n{outcome}")
         return
@@ -1052,8 +1052,8 @@ def finalize_match(match_id):
         match["chat_id"],
         f"📋 Match Summary:\n{summary}\n\n"
         f"🏆 {winner_name} wins the duel!\n"
-        f"{winner_name}: +{winner_payout} coins\n"
-        f"{loser_name}: -{loser_bet} coins",
+        f"{winner_name}: +{winner_payout} rupess\n"
+        f"{loser_name}: -{loser_bet} rupess",
     )
 
 
@@ -1173,7 +1173,7 @@ def handle_tower_cancel(call):
         return
     tower_setups.pop(setup_id, None)
     bot.answer_callback_query(call.id, "Cancelled.")
-    bot.send_message(setup["chat_id"], "❌ Tower game cancelled. No coins were deducted.")
+    bot.send_message(setup["chat_id"], "❌ Tower game cancelled. No money were deducted.")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("twr:"))
@@ -1203,7 +1203,7 @@ def handle_tower_tile(call):
         bot.send_message(
             chat_id,
             f"💥 Boom! You hit a bomb on floor {tower['current_floor'] + 1}.\n"
-            f"Lost {tower['bet_amount']} coins.\nBalance: {get_balance(telegram_id)}",
+            f"Lost {tower['bet_amount']} rupess.\nBalance: {get_balance(telegram_id)}",
         )
         return
 
@@ -1221,7 +1221,7 @@ def handle_tower_tile(call):
         bot.send_message(
             chat_id,
             f"🏆 You reached the top! Floor {TOTAL_FLOORS}/{TOTAL_FLOORS} • {mult}x\n"
-            f"✅ Won {payout} coins!\nBalance: {get_balance(telegram_id)}",
+            f"✅ Won {payout} rupess!\nBalance: {get_balance(telegram_id)}",
         )
         return
 
@@ -1261,7 +1261,7 @@ def handle_tower_cashout(call):
     bot.send_message(
         chat_id,
         f"💰 Cashed out at floor {tower['current_floor']}/{TOTAL_FLOORS} • {mult}x\n"
-        f"✅ Won {payout} coins!\nBalance: {get_balance(telegram_id)}",
+        f"✅ Won {payout} rupess!\nBalance: {get_balance(telegram_id)}",
     )
 
 
