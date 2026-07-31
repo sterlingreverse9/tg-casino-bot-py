@@ -4,9 +4,9 @@ from settings import get_house_edge
 TOTAL_FLOORS = 8
 
 DIFFICULTY_CONFIG = {
-    "easy": {"tiles": 4, "bombs": 1},
-    "medium": {"tiles": 4, "bombs": 2},
-    "hard": {"tiles": 4, "bombs": 3},
+    "easy": {"tiles": 4, "bombs": 2},    # 50% survive per floor (was 75%)
+    "medium": {"tiles": 4, "bombs": 3},  # 25% survive per floor (was 50%)
+    "hard": {"tiles": 5, "bombs": 4},    # 20% survive per floor (was 25%)
 }
 
 
@@ -26,3 +26,4 @@ def generate_floor(difficulty: str):
     tiles = ["bomb"] * cfg["bombs"] + ["gold"] * (cfg["tiles"] - cfg["bombs"])
     random.shuffle(tiles)
     return tiles
+
