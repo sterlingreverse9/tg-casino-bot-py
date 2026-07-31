@@ -1354,16 +1354,51 @@ def deposit_flow(message):
     if not state:
         return
 
+    # Waiting for UTR
+    if state["step"] == "utr":
+
+        utr = message.text.strip()
+
+        if not utr.isdigit() or len(utr) != 12:
+            bot.reply_to(
+                message,
+                "❌ UTR must be exactly 12 digits."
+            )
+            return
+
+        dep = get_pending_deposit(message.from_user.id)
+
+        if not dep:
+            bot.reply_to(message, "Deposit session expired.")
+            return
+
+        save_utr(dep["id"], utr)
+
+        state["step"] = "screenshot"
+
+        bot.reply_to(
+            message,
+            "📷 Now send the payment screenshot."
+        )
+        return
+
+    # Waiting for deposit amount
     if state["step"] == "amount":
 
         try:
             amount = float(message.text)
-        except:
-            bot.reply_to(message, "❌ Please enter a valid amount.")
+        except ValueError:
+            bot.reply_to(
+                message,
+                "❌ Please enter a valid amount."
+            )
             return
 
         if amount < 50:
-            bot.reply_to(message, "❌ Minimum deposit is ₹50.")
+            bot.reply_to(
+                message,
+                "❌ Minimum deposit is ₹50."
+            )
             return
 
         create_deposit(
@@ -1396,6 +1431,7 @@ def deposit_flow(message):
             reply_markup=markup,
             parse_mode="Markdown"
         )
+        return
 @bot.callback_query_handler(func=lambda call: call.data == "deposit_paid")
 def deposit_paid(call):
 
