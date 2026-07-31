@@ -95,12 +95,26 @@ def cmd_me(message):
     )
 
 
-@bot.message_handler(commands=["wallet" , "bal" , "balance" ])
+@bot.message_handler(commands=["wallet", "bal", "balance"])
 def cmd_wallet(message):
     ensure_user(message)
-    balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: ₹{balance} ")
 
+    balance = get_balance(message.from_user.id)
+
+    markup = InlineKeyboardMarkup(row_width=2)
+
+    markup.add(
+        InlineKeyboardButton("💰 Deposit", callback_data="deposit"),
+        InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")
+    )
+
+    bot.reply_to(
+        message,
+        f"💳 **Wallet**\n\n"
+        f"💰 Current Balance: ₹{balance}",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
 
 @bot.message_handler(commands=["depo","deposit" , "withdraw"])
 def cmd_depo_withdraw(message):
