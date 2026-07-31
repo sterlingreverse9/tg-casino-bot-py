@@ -1342,10 +1342,10 @@ def wallet_buttons(call):
     bot.answer_callback_query(call.id)
 
     if call.data == "deposit":
-    cmd_deposit(call.message)
+        cmd_deposit(call.message)
 
     elif call.data == "withdraw":
-    cmd_withdraw(call.message)
+        cmd_withdraw(call.message)
 @bot.message_handler(func=lambda m: m.chat.type == "private")
 def deposit_flow(message):
 
