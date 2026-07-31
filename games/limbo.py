@@ -5,8 +5,8 @@ from settings import get_min_bet, get_max_bet, get_house_edge
 MIN_MULTIPLIER = 1.01
 MAX_MULTIPLIER = 100
 BASE_FACTOR = 0.6       # tuned so P(roll >= 2x) = 30% i.e. 70% of rolls land below 2x
-TAIL_THRESHOLD = 3      # rolls above this get compressed further
-TAIL_COMPRESSION = 0.3  # how much of the excess above TAIL_THRESHOLD carries through
+TAIL_THRESHOLD = 3.5      # rolls above this get compressed further
+TAIL_COMPRESSION = 0.4  # how much of the excess above TAIL_THRESHOLD carries through
 
 
 def parse_multiplier(text: str):
@@ -65,11 +65,11 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
         bot.send_message(
             chat_id,
             f"🚀 Limbo rolled {round(result, 2)}x (needed {target_multiplier}x)\n"
-            f"✅ You won {payout} coins!\nBalance: {new_balance}",
+            f"✅ You won ₹{payout} !\nBalance: {new_balance}",
         )
     else:
         bot.send_message(
             chat_id,
             f"🚀 Limbo rolled {round(result, 2)}x (needed {target_multiplier}x)\n"
-            f"❌ You lost {bet_amount} coins.\nBalance: {new_balance}",
+            f"❌ You lost {bet_amount} coins.\nBalance: ₹{new_balance}",
         )
