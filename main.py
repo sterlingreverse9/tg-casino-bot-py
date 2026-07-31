@@ -3,6 +3,17 @@ import time
 import uuid
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from deposit import (
+    create_deposit,
+    save_utr,
+    save_screenshot,
+    get_pending_deposit,
+    get_deposit_by_utr,
+    approve_deposit,
+    decline_deposit,
+    pending_deposits,
+    deposit_history,
+)
 
 from config import BOT_TOKEN, CASINO_NAME
 from db import select, insert, update
@@ -17,6 +28,7 @@ from games.tower import DIFFICULTY_CONFIG, TOTAL_FLOORS, generate_floor, floor_m
 from middleware.admin import is_admin
 
 bot = telebot.TeleBot(BOT_TOKEN)
+deposit_states = {}
 active_rains = {}  # message_id -> {"amount", "chat_id", "participants": set()}
 dice_setups = {}  # setup_id -> in-progress wizard state
 active_matches = {}  # match_id -> live match state
@@ -116,13 +128,60 @@ def cmd_wallet(message):
         parse_mode="Markdown"
     )
 
-@bot.message_handler(commands=["depo","deposit" , "withdraw"])
-def cmd_depo_withdraw(message):
+@bot.message_handler(commands=["deposit", "depo"])
+def cmd_deposit(message):
+
+    if message.chat.type != "private":
+        markup = InlineKeyboardMarkup()
+
+        markup.add(
+            InlineKeyboardButton(
+                "💬 Open Deposit",
+                url=f"https://t.me/{bot.get_me().username}?start=deposit"
+            )
+        )
+
+        bot.reply_to(
+            message,
+            "💰 Deposits are handled in private for your security.",
+            reply_markup=markup
+        )
+        return
+
+    deposit_states[message.from_user.id] = {
+        "step": "amount"
+    }
+
     bot.reply_to(
         message,
-        f"⚠️ Deposits and withdrawals are processed by @mrpuppyx . Contact him to deposit or withdraw — {CASINO_NAME} runs on manual transactions only, no automation right now.",
+        "💰 Enter deposit amount.\n\nMinimum: ₹50"
     )
 
+
+@bot.message_handler(commands=["withdraw"])
+def cmd_withdraw(message):
+
+    if message.chat.type != "private":
+        markup = InlineKeyboardMarkup()
+
+        markup.add(
+            InlineKeyboardButton(
+                "💬 Open Withdraw",
+                url=f"https://t.me/{bot.get_me().username}?start=withdraw"
+            )
+        )
+
+        bot.reply_to(
+            message,
+            "💸 Withdrawals are handled in private for your security.",
+            reply_markup=markup
+        )
+        return
+
+    bot.reply_to(
+        message,
+        "🚧 Withdraw system coming soon."
+    )
 
 @bot.message_handler(commands=["rakeback"])
 def cmd_rakeback(message):
