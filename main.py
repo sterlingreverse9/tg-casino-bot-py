@@ -1351,6 +1351,9 @@ def deposit_flow(message):
 
     state = deposit_states.get(message.from_user.id)
 
+    print("STATE =", state)
+    print("PHOTO =", bool(message.photo))
+
     if not state:
         return
 
