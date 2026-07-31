@@ -464,8 +464,14 @@ def handle_rain_join(call):
 CASINO_LABEL = "The Casino"
 
 
+def display_name(user):
+    if user.username:
+        return f"@{user.username}"
+    return user.first_name or "Player"
+
+
 def parse_dice_command(text: str, reply_msg):
-    """Returns (amount_str, code_or_None, opponent_id_or_None, opponent_name_or_None)."""
+    """Returns (amount_str, code_or_None, opponent_username, opponent_id, opponent_name)."""
     tokens = text.split()[1:]
     amount_str, code, opponent_username = None, None, None
     for tok in tokens:
@@ -479,13 +485,13 @@ def parse_dice_command(text: str, reply_msg):
     opponent_id, opponent_name = None, None
     if reply_msg:
         opponent_id = reply_msg.from_user.id
-        opponent_name = reply_msg.from_user.username or reply_msg.from_user.first_name
+        opponent_name = display_name(reply_msg.from_user)
         get_or_create_user(opponent_id, reply_msg.from_user.username)
     elif opponent_username:
         opponent = select("users", filters={"username": opponent_username}, single=True)
         if opponent:
             opponent_id = int(opponent["telegram_id"])
-            opponent_name = opponent_username
+            opponent_name = f"@{opponent_username}"
 
     return amount_str, code, opponent_username, opponent_id, opponent_name
 
@@ -552,7 +558,6 @@ def finalize_setup(setup_id):
         )
         return
 
-    # vs player: send challenge, 120s to accept
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("✅ Accept", callback_data=f"daccept:{setup_id}"),
@@ -589,7 +594,7 @@ def cmd_dice(message):
         bot.reply_to(message, "Usage: /dice <amount|all|half> [<dice>d<rounds>w] [@opponent]\nOr reply to someone's message with /dice <amount> [...]")
         return
     if opponent_username and opponent_id is None:
-        bot.reply_to(message, f"@{opponent_username} needs to message this bot at least once (e.g. /me) before they can be challenged.")
+        bot.reply_to(message, f"That user needs to message this bot at least once (e.g. /me) before they can be challenged.")
         return
     if opponent_id == message.from_user.id:
         bot.reply_to(message, "You can't challenge yourself.")
@@ -606,7 +611,7 @@ def cmd_dice(message):
     setup_id = uuid.uuid4().hex[:10]
     dice_setups[setup_id] = {
         "initiator_id": message.from_user.id,
-        "initiator_name": message.from_user.username or message.from_user.first_name,
+        "initiator_name": display_name(message.from_user),
         "amount_str": amount_str,
         "dice_count": dice_count,
         "rounds": rounds,
@@ -711,18 +716,20 @@ def start_match(chat_id, player_a, player_a_name, bet_a, player_b, player_b_name
         "player_b": player_b, "player_b_name": player_b_name, "bet_b": bet_b,
         "dice_count": dice_count, "rounds": rounds, "mode": mode,
         "current_round": 1, "a_wins": 0, "b_wins": 0,
-        "a_current": [], "b_current": [],
+        "a_current": [], "b_current": [], "round_log": [],
     }
     dice_waiters[(chat_id, player_a)] = match_id
     if player_b is not None:
         dice_waiters[(chat_id, player_b)] = match_id
 
-    vs = player_b_name
     bot.send_message(
         chat_id,
-        f"⚔️ Dice Duel started! {player_a_name} vs {vs} • {dice_count} dice/round • {rounds} round(s) • {mode} mode\n"
+        f"⚔️ Dice Duel started! {player_a_name} vs {player_b_name} • {dice_count} dice/round • {rounds} round(s) • {mode} mode\n"
         f"{player_a_name}, send your 🎲 dice now!",
     )
+    if player_b is not None:
+        schedule_afk_timers(match_id, 1, "a")
+        schedule_afk_timers(match_id, 1, "b")
 
 
 @bot.message_handler(content_types=["dice"])
@@ -730,7 +737,7 @@ def handle_incoming_dice(message):
     key = (message.chat.id, message.from_user.id)
     match_id = dice_waiters.get(key)
     if match_id is None:
-        return  # not part of an active match, ignore
+        return
     match = active_matches.get(match_id)
     if match is None:
         return
@@ -740,13 +747,16 @@ def handle_incoming_dice(message):
 
     remaining = match["dice_count"] - len(match[f"{side}_current"])
     if remaining > 0:
-        bot.send_message(match["chat_id"], f"Got it! Send {remaining} more dice.")
+        bot.reply_to(message, f"Got it! Send {remaining} more dice.")
         return
 
-    # this side is done for the round
     if match["player_b"] is None and side == "a":
-        # vs bot: bot auto-rolls its own dice for this round
-        match["b_current"] = [bot.send_dice(match["chat_id"], emoji="🎲").dice.value for _ in range(match["dice_count"])]
+        match["b_current"] = [
+            bot.send_dice(match["chat_id"], emoji="🎲", reply_to_message_id=message.message_id).dice.value
+            for _ in range(match["dice_count"])
+        ]
+    else:
+        bot.reply_to(message, "Got your dice for this round!")
 
     if len(match["a_current"]) == match["dice_count"] and len(match["b_current"]) == match["dice_count"]:
         resolve_round(match_id)
@@ -766,17 +776,20 @@ def resolve_round(match_id):
         bot.send_message(chat_id, f"Round tied ({a_sum} vs {b_sum})! Reroll this round — send your dice again.")
         match["a_current"], match["b_current"] = [], []
         prompt_reroll(match)
+        if match["player_b"] is not None:
+            schedule_afk_timers(match_id, match["current_round"], "a")
+            schedule_afk_timers(match_id, match["current_round"], "b")
         return
 
     winner_side = decide_round_winner(a_sum, b_sum, match["mode"])
     match[f"{winner_side}_wins"] += 1
     winner_name = match["player_a_name"] if winner_side == "a" else match["player_b_name"]
 
-    bot.send_message(
-        chat_id,
+    match["round_log"].append(
         f"Round {match['current_round']}: {match['player_a_name']} {match['a_current']} ({a_sum}) vs "
-        f"{match['player_b_name']} {match['b_current']} ({b_sum}) — {winner_name} wins the round!",
+        f"{match['player_b_name']} {match['b_current']} ({b_sum}) — {winner_name} won"
     )
+    bot.send_message(chat_id, match["round_log"][-1])
 
     needed = match["rounds"] // 2 + 1
     if match["a_wins"] >= needed or match["b_wins"] >= needed:
@@ -785,6 +798,9 @@ def resolve_round(match_id):
         match["current_round"] += 1
         match["a_current"], match["b_current"] = [], []
         prompt_reroll(match)
+        if match["player_b"] is not None:
+            schedule_afk_timers(match_id, match["current_round"], "a")
+            schedule_afk_timers(match_id, match["current_round"], "b")
 
 
 def prompt_reroll(match):
@@ -793,6 +809,62 @@ def prompt_reroll(match):
         bot.send_message(chat_id, f"{match['player_a_name']}, send your 🎲 dice for the next round!")
     else:
         bot.send_message(chat_id, f"{match['player_a_name']} and {match['player_b_name']}, send your 🎲 dice for the next round!")
+
+
+def schedule_afk_timers(match_id, round_number, side):
+    def warn():
+        match = active_matches.get(match_id)
+        if not match or match["current_round"] != round_number:
+            return
+        if len(match[f"{side}_current"]) >= match["dice_count"]:
+            return
+        name = match["player_a_name"] if side == "a" else match["player_b_name"]
+        bot.send_message(match["chat_id"], f"⏰ {name}, you'll forfeit the match in 30 seconds if you don't roll!")
+
+    def forfeit():
+        match = active_matches.get(match_id)
+        if not match or match["current_round"] != round_number:
+            return
+        if len(match[f"{side}_current"]) >= match["dice_count"]:
+            return
+        forfeit_player(match_id, side)
+
+    threading.Timer(60, warn).start()
+    threading.Timer(90, forfeit).start()
+
+
+def forfeit_player(match_id, afk_side):
+    match = active_matches.pop(match_id, None)
+    if match is None:
+        return
+    chat_id = match["chat_id"]
+    dice_waiters.pop((chat_id, match["player_a"]), None)
+    if match["player_b"] is not None:
+        dice_waiters.pop((chat_id, match["player_b"]), None)
+
+    afk_name = match["player_a_name"] if afk_side == "a" else match["player_b_name"]
+    afk_id = match["player_a"] if afk_side == "a" else match["player_b"]
+    other_id = match["player_b"] if afk_side == "a" else match["player_a"]
+    other_name = match["player_b_name"] if afk_side == "a" else match["player_a_name"]
+    afk_bet = match["bet_a"] if afk_side == "a" else match["bet_b"]
+    other_bet = match["bet_b"] if afk_side == "a" else match["bet_a"]
+
+    half = round(afk_bet / 2, 2)
+    to_house = round(afk_bet - half, 2)
+
+    adjust_balance(other_id, other_bet + half)
+    house = select("house", filters={"id": 1}, single=True)
+    update("house", {"id": 1}, {"balance": float(house["balance"]) + to_house})
+
+    record_bet(telegram_id=afk_id, game="dice_duel_pvp", bet_amount=afk_bet, payout=0, result="loss", meta={"forfeit": True})
+    record_bet(telegram_id=other_id, game="dice_duel_pvp", bet_amount=other_bet, payout=other_bet + half, result="win", meta={"opponent_forfeited": True})
+
+    bot.send_message(
+        chat_id,
+        f"⌛ {afk_name} didn't roll in time and forfeited.\n"
+        f"{other_name} gets their {other_bet} coins back plus {half} coins.\n"
+        f"{half} coins go to the house.",
+    )
 
 
 def finalize_match(match_id):
@@ -804,9 +876,9 @@ def finalize_match(match_id):
         dice_waiters.pop((match["chat_id"], match["player_b"]), None)
 
     winner_side = "a" if match["a_wins"] > match["b_wins"] else "b"
+    summary = "\n".join(match["round_log"])
 
     if match["player_b"] is None:
-        # vs bot
         won = winner_side == "a"
         payout = payout_for_50_50(match["bet_a"]) if won else 0
         if won:
@@ -815,18 +887,21 @@ def finalize_match(match_id):
             telegram_id=match["player_a"], game="dice_duel_bot", bet_amount=match["bet_a"], payout=payout,
             result="win" if won else "loss", meta={"mode": match["mode"]},
         )
-        if won:
-            bot.send_message(match["chat_id"], f"🏆 You won the duel! +{payout} ruppess.\nBalance: {get_balance(match['player_a'])}")
-        else:
-            bot.send_message(match["chat_id"], f"❌ You lost the duel. -{match['bet_a']} ruppees.\nBalance: {get_balance(match['player_a'])}")
+        outcome = (
+            f"🏆 You won the duel! +{payout} coins.\nBalance: {get_balance(match['player_a'])}"
+            if won else
+            f"❌ You lost the duel. -{match['bet_a']} coins.\nBalance: {get_balance(match['player_a'])}"
+        )
+        bot.send_message(match["chat_id"], f"📋 Match Summary:\n{summary}\n\n{outcome}")
         return
 
-    # PvP: pot with rake
     pot = match["bet_a"] + match["bet_b"]
     rake = round(pot * HOUSE_EDGE_RAKE, 2)
     winner_payout = round(pot - rake, 2)
     winner_id = match["player_a"] if winner_side == "a" else match["player_b"]
     winner_name = match["player_a_name"] if winner_side == "a" else match["player_b_name"]
+    loser_name = match["player_b_name"] if winner_side == "a" else match["player_a_name"]
+    loser_bet = match["bet_b"] if winner_side == "a" else match["bet_a"]
 
     adjust_balance(winner_id, winner_payout)
     record_bet(telegram_id=match["player_a"], game="dice_duel_pvp", bet_amount=match["bet_a"],
@@ -839,7 +914,13 @@ def finalize_match(match_id):
     house = select("house", filters={"id": 1}, single=True)
     update("house", {"id": 1}, {"balance": float(house["balance"]) + rake})
 
-    bot.send_message(match["chat_id"], f"🏆 {winner_name} wins the duel! +{winner_payout} ruppess.")
+    bot.send_message(
+        match["chat_id"],
+        f"📋 Match Summary:\n{summary}\n\n"
+        f"🏆 {winner_name} wins the duel!\n"
+        f"{winner_name}: +{winner_payout} coins\n"
+        f"{loser_name}: -{loser_bet} coins",
+    )
 
 
 def payout_for_50_50(bet_amount):
