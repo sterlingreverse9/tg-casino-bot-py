@@ -1342,10 +1342,10 @@ def wallet_buttons(call):
     bot.answer_callback_query(call.id)
 
     if call.data == "deposit":
-        cmd_depo_withdraw(call.message)
+    cmd_deposit(call.message)
 
     elif call.data == "withdraw":
-        cmd_depo_withdraw(call.message)
+    cmd_withdraw(call.message)
 @bot.message_handler(func=lambda m: m.chat.type == "private")
 def deposit_flow(message):
 
@@ -1396,6 +1396,25 @@ def deposit_flow(message):
             reply_markup=markup,
             parse_mode="Markdown"
         )
+@bot.callback_query_handler(func=lambda call: call.data == "deposit_paid")
+def deposit_paid(call):
 
+    bot.answer_callback_query(call.id)
+
+    state = deposit_states.get(call.from_user.id)
+
+    if not state:
+        bot.send_message(
+            call.message.chat.id,
+            "❌ Deposit session expired.\nUse /deposit again."
+        )
+        return
+
+    state["step"] = "utr"
+
+    bot.send_message(
+        call.message.chat.id,
+        "💳 Please send your 12-digit UTR / Transaction ID."
+    )
 print(f"{CASINO_NAME} bot running...")
 bot.infinity_polling()
