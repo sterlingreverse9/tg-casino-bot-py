@@ -207,7 +207,7 @@ def cmd_cf(message):
         return
     play_coinflip(bot, message, message.from_user.id, bet_amount, parts[2])
     @bot.message_handler(commands=["limbo"])
-def cmd_limbo(message):
+    def cmd_limbo(message):
     ensure_user(message)
     if not is_game_enabled("limbo"):
         bot.reply_to(message, "Limbo is currently disabled.")
