@@ -10,6 +10,7 @@ from wallet import get_or_create_user, get_balance, adjust_balance, get_house_ba
 from game_status import is_game_enabled, set_game_enabled
 from games.coinflip import play_coinflip
 from games.dice_roll import play_dice_roll, ALL_CHOICES
+from games.limbo import play_limbo, parse_multiplier
 from games.dice_duel import parse_dice_code, decide_round_winner, MIN_BET as DUEL_MIN_BET
 from middleware.admin import is_admin
 
