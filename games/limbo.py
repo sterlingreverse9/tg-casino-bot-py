@@ -8,8 +8,8 @@ MAX_MULTIPLIER = 1000
 # (low, high, probability) — probabilities should sum to 1.0
 BUCKETS = [
     (0.98, 1.00, 0.18),      # 18%
-    (1.01, 1.50, 0.28),      # 28%
-    (1.50, 2.00, 0.23),      # 23%
+    (1.01, 1.50, 0.20),      # 20%
+    (1.50, 2.00, 0.31),      # 31%
     (2.00, 3.00, 0.15),      # 15%
     (3.00, 5.00, 0.08),      # 8%
     (5.00, 10.00, 0.04),     # 4%
@@ -53,7 +53,7 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
         bot.send_message(chat_id, f"Maximum bet is {round(max_bet, 2)} coins.")
         return
     if bet_amount > balance:
-        bot.send_message(chat_id, f"Not enough balance. Your balance: {balance}")
+        bot.send_message(chat_id, f"Not enough balance. Your balance: ₹{balance}")
         return
 
     adjust_balance(telegram_id, -bet_amount)
@@ -79,11 +79,11 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
         bot.send_message(
             chat_id,
             f"🚀 Limbo rolled {result}x (needed {target_multiplier}x)\n"
-            f"✅ You won ₹{payout} !\nBalance: {new_balance}",
+            f"✅ You won ₹{payout} !\nBalance: ₹{new_balance}",
         )
     else:
         bot.send_message(
             chat_id,
             f"🚀 Limbo rolled {result}x (needed {target_multiplier}x)\n"
-            f"❌ You lost ₹{bet_amount} .\nBalance: {new_balance}",
+            f"❌ You lost ₹{bet_amount} .\nBalance: ₹{new_balance}",
         )
