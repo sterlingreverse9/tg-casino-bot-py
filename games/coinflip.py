@@ -28,6 +28,6 @@ def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str
 
     flip_label = "🪙 Heads" if outcome == "heads" else "🪙 Tails"
     if won:
-        bot.reply_to(message, f"{flip_label}!\nYou won {payout} coins! 🎉\nBalance: {new_balance}")
+        bot.reply_to(message, f"{flip_label}!\nYou won ₹{payout} ! 🎉\nBalance: {new_balance}")
     else:
-        bot.reply_to(message, f"{flip_label}!\nYou lost {bet_amount} coins.\nBalance: {new_balance}")
+        bot.reply_to(message, f"{flip_label}!\nYou lost ₹{bet_amount} .\nBalance: {new_balance}")
