@@ -1,12 +1,21 @@
 import random
 from wallet import get_balance, adjust_balance, record_bet, get_house_balance
-from settings import get_min_bet, get_max_bet, get_house_edge
+from settings import get_min_bet, get_max_bet
 
 MIN_MULTIPLIER = 1.01
-MAX_MULTIPLIER = 100
-BASE_FACTOR = 0.6       # tuned so P(roll >= 2x) = 30% i.e. 70% of rolls land below 2x
-TAIL_THRESHOLD = 3.5      # rolls above this get compressed further
-TAIL_COMPRESSION = 0.4  # how much of the excess above TAIL_THRESHOLD carries through
+MAX_MULTIPLIER = 1000
+
+# (low, high, probability) — probabilities should sum to 1.0
+BUCKETS = [
+    (0.5, 1.0, 0.15),      # instant loss
+    (1.01, 1.50, 0.40),
+    (1.50, 2.0, 0.20),
+    (2.0, 3.0, 0.10),
+    (3.0, 10.0, 0.05),
+    (10.0, 50.0, 0.02),
+    (50.0, 100.0, 0.01),
+    (100.0, MAX_MULTIPLIER, 0.07),
+]
 
 
 def parse_multiplier(text: str):
@@ -19,6 +28,17 @@ def parse_multiplier(text: str):
     if value < MIN_MULTIPLIER or value > MAX_MULTIPLIER:
         return None
     return value
+
+
+def roll_result() -> float:
+    r = random.random()
+    cumulative = 0.0
+    for low, high, prob in BUCKETS:
+        cumulative += prob
+        if r <= cumulative:
+            return round(random.uniform(low, high), 2)
+    low, high, _ = BUCKETS[-1]
+    return round(random.uniform(low, high), 2)
 
 
 def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multiplier: float):
@@ -38,13 +58,7 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
 
     adjust_balance(telegram_id, -bet_amount)
 
-    r = random.random()
-    raw = BASE_FACTOR / (1 - r) if r < 1 else MAX_MULTIPLIER
-    if raw <= TAIL_THRESHOLD:
-        result = raw
-    else:
-        result = TAIL_THRESHOLD + (raw - TAIL_THRESHOLD) * TAIL_COMPRESSION
-    result = min(result, MAX_MULTIPLIER)
+    result = roll_result()
     won = result >= target_multiplier
 
     payout = round(bet_amount * target_multiplier, 2) if won else 0
@@ -57,19 +71,19 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
         bet_amount=bet_amount,
         payout=payout,
         result="win" if won else "loss",
-        meta={"target": target_multiplier, "result": round(result, 2)},
+        meta={"target": target_multiplier, "result": result},
     )
 
     new_balance = get_balance(telegram_id)
     if won:
         bot.send_message(
             chat_id,
-            f"🚀 Limbo rolled {round(result, 2)}x (needed {target_multiplier}x)\n"
+            f"🚀 Limbo rolled {result}x (needed {target_multiplier}x)\n"
             f"✅ You won ₹{payout} !\nBalance: {new_balance}",
         )
     else:
         bot.send_message(
             chat_id,
-            f"🚀 Limbo rolled {round(result, 2)}x (needed {target_multiplier}x)\n"
-            f"❌ You lost {bet_amount} coins.\nBalance: ₹{new_balance}",
+            f"🚀 Limbo rolled {result}x (needed {target_multiplier}x)\n"
+            f"❌ You lost ₹{bet_amount} .\nBalance: {new_balance}",
         )
