@@ -131,13 +131,16 @@ def cmd_deposit(message):
 
     ensure_user(message)
     deposit_states[message.from_user.id] = {"step": "amount"}
-    bot.reply_to(
-        message,
-        FAKE_QR_BLOCK +
+    caption = (
         f"⚠️ This is {CASINO_NAME}, a FUN casino using virtual coins only.\n"
         "Do NOT send real money — nothing will happen if you try, and it won't be refunded.\n\n"
-        "How many fake coins would you like to request? (enter a number)",
+        "How many fake coins would you like to request? (min 50, enter a number)"
     )
+    try:
+        with open("/storage/emulated/0/Download/qr.jpg", "rb") as photo:
+            bot.send_photo(message.chat.id, photo, caption=caption)
+    except FileNotFoundError:
+        bot.reply_to(message, FAKE_QR_BLOCK + caption)
 
 
 @bot.message_handler(commands=["withdraw"])
@@ -158,8 +161,8 @@ def handle_deposit_text(message):
         except ValueError:
             bot.reply_to(message, "Enter a valid number of coins.")
             return
-        if amount <= 0:
-            bot.reply_to(message, "Enter a positive number.")
+        if amount < 50:
+            bot.reply_to(message, "Minimum deposit is 50 coins.")
             return
         dep = create_deposit(message.from_user.id, message.from_user.username, amount)
         state["deposit_id"] = dep["id"]
@@ -172,7 +175,11 @@ def handle_deposit_text(message):
         if len(utr) != 12 or not utr.isdigit():
             bot.reply_to(message, "UTR should be exactly 12 digits. It's fake anyway — just type any 12 digits:")
             return
-        save_utr(state["deposit_id"], utr)
+        try:
+            save_utr(state["deposit_id"], utr)
+        except Exception:
+            bot.reply_to(message, "That UTR was already used by someone else. Try a different 12 digits:")
+            return
         deposit_states.pop(message.from_user.id, None)
         bot.reply_to(
             message,
@@ -206,8 +213,8 @@ def notify_admins_of_deposit(telegram_id, username, utr):
     for a in admins:
         try:
             bot.send_message(int(a["telegram_id"]), text)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Failed to DM admin {a['telegram_id']}: {e}")
 
 
 @bot.message_handler(commands=["approve"])
