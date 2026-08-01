@@ -31,7 +31,7 @@ def cmd_add(message):
     get_or_create_user(target_id, None)
     new_balance = adjust_balance(target_id, amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added {amount} coins\nUser: {target_id}\nNew balance: {new_balance}")
+    bot.reply_to(message, f"✅ Added ₹{amount} \nUser: {target_id}\nNew balance: ₹{new_balance}")
 
 
 @bot.message_handler(commands=["deduct"])
@@ -62,7 +62,7 @@ def cmd_deduct(message):
         return
     new_balance = adjust_balance(target_id, -amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted {amount} coins\nUser: {target_id}\nBalance: {new_balance}")
+    bot.reply_to(message, f"✅ Deducted ₹{amount} \nUser: {target_id}\nBalance: ₹{new_balance}")
 
 
 # ---------- Admin: promote/demote ----------
