@@ -3,17 +3,6 @@ import time
 import uuid
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from deposit import (
-    create_deposit,
-    save_utr,
-    save_screenshot,
-    get_pending_deposit,
-    get_deposit_by_utr,
-    approve_deposit,
-    decline_deposit,
-    pending_deposits,
-    deposit_history,
-)
 
 from config import BOT_TOKEN, CASINO_NAME
 from db import select, insert, update
@@ -25,10 +14,14 @@ from games.dice_roll import play_dice_roll, ALL_CHOICES
 from games.limbo import play_limbo, parse_multiplier
 from games.dice_duel import parse_dice_code, decide_round_winner
 from games.tower import DIFFICULTY_CONFIG, TOTAL_FLOORS, generate_floor, floor_multiplier
+from deposit import (
+    create_deposit, save_utr, save_screenshot, get_pending_deposit,
+    get_deposit_by_utr, approve_deposit, decline_deposit, pending_deposits, deposit_history,
+)
 from middleware.admin import is_admin
 
 bot = telebot.TeleBot(BOT_TOKEN)
-deposit_states = {}
+deposit_states = {}  # telegram_id -> {"step": "amount"|"screenshot"|"utr", "deposit_id": int}
 active_rains = {}  # message_id -> {"amount", "chat_id", "participants": set()}
 dice_setups = {}  # setup_id -> in-progress wizard state
 active_matches = {}  # match_id -> live match state
@@ -107,81 +100,213 @@ def cmd_me(message):
     )
 
 
-@bot.message_handler(commands=["wallet", "bal", "balance"])
+@bot.message_handler(commands=["wallet"])
 def cmd_wallet(message):
     ensure_user(message)
-
     balance = get_balance(message.from_user.id)
+    bot.reply_to(message, f"💰 Your balance: {balance} coins")
 
-    markup = InlineKeyboardMarkup(row_width=2)
 
-    markup.add(
-        InlineKeyboardButton("💰 Deposit", callback_data="deposit"),
-        InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")
-    )
+FAKE_QR_BLOCK = (
+    "┏━━━━━━━━━━━━━━━━┓\n"
+    "┃   🚫 FAKE QR   ┃\n"
+    "┃  NOT A REAL   ┃\n"
+    "┃ PAYMENT CODE  ┃\n"
+    "┗━━━━━━━━━━━━━━━━┛\n\n"
+    "UPI ID: not-real@fakebank (this is NOT a real UPI ID — do not send money to it)\n\n"
+)
 
-    bot.reply_to(
-        message,
-        f"💳 **Wallet**\n\n"
-        f"💰 Current Balance: ₹{balance}",
-        reply_markup=markup,
-        parse_mode="Markdown"
-    )
 
 @bot.message_handler(commands=["deposit", "depo"])
 def cmd_deposit(message):
+    if not is_game_enabled("deposit"):
+        bot.reply_to(message, "Deposits are currently paused.")
+        return
 
     if message.chat.type != "private":
         markup = InlineKeyboardMarkup()
-
-        markup.add(
-            InlineKeyboardButton(
-                "💬 Open Deposit",
-                url=f"https://t.me/{bot.get_me().username}?start=deposit"
-            )
-        )
-
-        bot.reply_to(
-            message,
-            "💰 Deposits are handled in private for your security.",
-            reply_markup=markup
-        )
+        markup.add(InlineKeyboardButton("💬 Open Deposit", url=f"https://t.me/{bot.get_me().username}?start=deposit"))
+        bot.reply_to(message, "💰 Deposits are handled in DM for the bit — tap below.", reply_markup=markup)
         return
 
-    deposit_states[message.from_user.id] = {
-        "step": "amount"
-    }
-
+    ensure_user(message)
+    deposit_states[message.from_user.id] = {"step": "amount"}
     bot.reply_to(
         message,
-        "💰 Enter deposit amount.\n\nMinimum: ₹50"
+        FAKE_QR_BLOCK +
+        f"⚠️ This is {CASINO_NAME}, a FUN casino using virtual coins only.\n"
+        "Do NOT send real money — nothing will happen if you try, and it won't be refunded.\n\n"
+        "How many fake coins would you like to request? (enter a number)",
     )
 
 
 @bot.message_handler(commands=["withdraw"])
 def cmd_withdraw(message):
+    bot.reply_to(message, f"⚠️ Withdrawals aren't a thing here — {CASINO_NAME} runs on fun coins only, no real money in or out.")
 
-    if message.chat.type != "private":
-        markup = InlineKeyboardMarkup()
 
-        markup.add(
-            InlineKeyboardButton(
-                "💬 Open Withdraw",
-                url=f"https://t.me/{bot.get_me().username}?start=withdraw"
-            )
-        )
+@bot.message_handler(
+    func=lambda m: m.from_user.id in deposit_states and m.content_type == "text" and not m.text.startswith("/"),
+    content_types=["text"],
+)
+def handle_deposit_text(message):
+    state = deposit_states[message.from_user.id]
 
-        bot.reply_to(
-            message,
-            "💸 Withdrawals are handled in private for your security.",
-            reply_markup=markup
-        )
+    if state["step"] == "amount":
+        try:
+            amount = float(message.text.strip())
+        except ValueError:
+            bot.reply_to(message, "Enter a valid number of coins.")
+            return
+        if amount <= 0:
+            bot.reply_to(message, "Enter a positive number.")
+            return
+        dep = create_deposit(message.from_user.id, message.from_user.username, amount)
+        state["deposit_id"] = dep["id"]
+        state["step"] = "screenshot"
+        bot.reply_to(message, "📸 Now send a screenshot to 'prove' your fake payment.")
         return
 
-    bot.reply_to(
-        message,
-        "🚧 Withdraw system coming soon."
+    if state["step"] == "utr":
+        utr = message.text.strip()
+        if len(utr) != 12 or not utr.isdigit():
+            bot.reply_to(message, "UTR should be exactly 12 digits. It's fake anyway — just type any 12 digits:")
+            return
+        save_utr(state["deposit_id"], utr)
+        deposit_states.pop(message.from_user.id, None)
+        bot.reply_to(
+            message,
+            "🤨 Why are you trying to deposit? This is a FUN casino, not a real one — nobody's taking your money!\n"
+            "But since you asked nicely, your request has been sent to the admins for some fake coins.",
+        )
+        notify_admins_of_deposit(message.from_user.id, message.from_user.username, utr)
+
+
+@bot.message_handler(
+    func=lambda m: m.from_user.id in deposit_states and deposit_states[m.from_user.id]["step"] == "screenshot",
+    content_types=["photo"],
+)
+def handle_deposit_screenshot(message):
+    state = deposit_states[message.from_user.id]
+    save_screenshot(state["deposit_id"], message.photo[-1].file_id)
+    state["step"] = "utr"
+    bot.reply_to(message, "Got it (it's fake, but nice try 😄). Now enter your 12-digit UTR code:")
+
+
+def notify_admins_of_deposit(telegram_id, username, utr):
+    dep = get_deposit_by_utr(utr)
+    admins = select("users", filters={"is_admin": True})
+    text = (
+        f"🆕 Fake deposit request\n"
+        f"User: {('@' + username) if username else telegram_id}\n"
+        f"Amount requested: {dep['amount']} coins\n"
+        f"UTR: {utr}\n\n"
+        f"/approve {utr}\n/decline {utr} <reason>"
     )
+    for a in admins:
+        try:
+            bot.send_message(int(a["telegram_id"]), text)
+        except Exception:
+            pass
+
+
+@bot.message_handler(commands=["approve"])
+def cmd_approve_deposit(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    parts = message.text.split()
+    if len(parts) != 2:
+        bot.reply_to(message, "Usage: /approve <utr>")
+        return
+    utr = parts[1]
+    dep = get_deposit_by_utr(utr)
+    if dep is None or dep["status"] != "pending":
+        bot.reply_to(message, "No pending deposit found with that UTR.")
+        return
+    approve_deposit(utr, message.from_user.id)
+    new_balance = adjust_balance(int(dep["telegram_id"]), float(dep["amount"]))
+    bot.reply_to(message, f"✅ Approved. Credited {dep['amount']} coins to {dep['telegram_id']}.")
+    try:
+        bot.send_message(int(dep["telegram_id"]), f"✅ Your deposit request was approved!\n+{dep['amount']} coins\nBalance: {new_balance}")
+    except Exception:
+        pass
+
+
+@bot.message_handler(commands=["decline"])
+def cmd_decline_deposit(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 2:
+        bot.reply_to(message, "Usage: /decline <utr> <reason>")
+        return
+    utr = parts[1]
+    reason = parts[2] if len(parts) > 2 else "No reason given"
+    dep = get_deposit_by_utr(utr)
+    if dep is None or dep["status"] != "pending":
+        bot.reply_to(message, "No pending deposit found with that UTR.")
+        return
+    decline_deposit(utr, message.from_user.id, reason)
+    bot.reply_to(message, f"❌ Declined deposit {utr}.")
+    try:
+        bot.send_message(int(dep["telegram_id"]), f"❌ Your deposit request was declined.\nReason: {reason}")
+    except Exception:
+        pass
+
+
+@bot.message_handler(commands=["pendingdepo"])
+def cmd_pending_deposits(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    deps = pending_deposits()
+    if not deps:
+        bot.reply_to(message, "No pending deposit requests.")
+        return
+    lines = [
+        f"⏳ {d['amount']} coins • {('@' + d['username']) if d['username'] else d['telegram_id']} • UTR {d.get('utr') or '—'}\n"
+        f"   /approve {d.get('utr') or ''}  |  /decline {d.get('utr') or ''} <reason>"
+        for d in deps
+    ]
+    bot.reply_to(message, f"⏳ Pending deposits ({len(deps)}):\n\n" + "\n\n".join(lines))
+
+
+@bot.message_handler(commands=["deposithistory"])
+def cmd_deposit_history(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    deps = deposit_history(limit=20)
+    if not deps:
+        bot.reply_to(message, "No deposit requests yet.")
+        return
+    icons = {"pending": "⏳", "approved": "✅", "declined": "❌"}
+    lines = [
+        f"{icons.get(d['status'], '❔')} {d['amount']} coins • {('@' + d['username']) if d['username'] else d['telegram_id']} • UTR {d.get('utr') or '—'}"
+        for d in deps
+    ]
+    bot.reply_to(message, "📜 Deposit history (last 20):\n" + "\n".join(lines))
+
+
+@bot.message_handler(commands=["stopdeposit"])
+def cmd_stopdeposit(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    set_game_enabled("deposit", False)
+    bot.reply_to(message, "⏸️ Deposits paused.")
+
+
+@bot.message_handler(commands=["startdeposit"])
+def cmd_startdeposit(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    set_game_enabled("deposit", True)
+    bot.reply_to(message, "▶️ Deposits resumed.")
+
 
 @bot.message_handler(commands=["rakeback"])
 def cmd_rakeback(message):
@@ -197,13 +322,13 @@ def cmd_rakeback(message):
         note = f"(1% rate — thanks for having {PROMO_TAG} in your name!)"
     else:
         note = f"(0.5% rate — add {PROMO_TAG} to your name for 1%!)"
-    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} rupees {note}\nBalance: {new_balance}")
+    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} coins {note}\nBalance: {new_balance}")
 
 
-@bot.message_handler(commands=["housebal", "house" , "hb" ])
+@bot.message_handler(commands=["housebal", "house"])
 def cmd_housebal(message):
     bal = get_house_balance()
-    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: {bal} rupees")
+    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: {bal} coins")
 
 
 @bot.message_handler(commands=["history"])
@@ -226,12 +351,12 @@ def cmd_history(message):
 @bot.message_handler(commands=["leaderboard", "ld"])
 def cmd_leaderboard(message):
     top = select("users", order="total_won", desc=True, limit=10)
-    lines = [f"{i+1}. {u['username'] or 'Anonymous'} — {u['total_won']} rupees won" for i, u in enumerate(top)]
+    lines = [f"{i+1}. {u['username'] or 'Anonymous'} — {u['total_won']} coins won" for i, u in enumerate(top)]
     bot.reply_to(message, f"🏆 {CASINO_NAME} Leaderboard:\n" + "\n".join(lines))
 
 
 # ---------- Tip ----------
-@bot.message_handler(commands=["tip" , "send" ])
+@bot.message_handler(commands=["tip"])
 def cmd_tip(message):
     ensure_user(message)
     parts = message.text.split()
@@ -382,66 +507,6 @@ def handle_dr_callback(call):
     play_dice_roll(bot, call.message.chat.id, owner_id, bet_amount, choice)
 
 
-# ---------- Admin: balance ----------
-@bot.message_handler(commands=["add"])
-def cmd_add(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    if message.reply_to_message:
-        if len(parts) != 2:
-            bot.reply_to(message, "Usage (reply): /add <amount>")
-            return
-        target_id = message.reply_to_message.from_user.id
-        amount = float(parts[1])
-    else:
-        if len(parts) != 3:
-            bot.reply_to(message, "Usage:\n/add <@username|telegram_id> <amount>\nOr reply: /add <amount>")
-            return
-        target_id = get_target_user(message, parts[1])
-        if not target_id:
-            bot.reply_to(message, "User not found.")
-            return
-        amount = float(parts[2])
-
-    get_or_create_user(target_id, None)
-    new_balance = adjust_balance(target_id, amount)
-    insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added ₹{amount} \nUser: {target_id}\nNew balance: {new_balance}")
-
-
-@bot.message_handler(commands=["deduct"])
-def cmd_deduct(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    if message.reply_to_message:
-        if len(parts) != 2:
-            bot.reply_to(message, "Usage (reply): /deduct <amount|all>")
-            return
-        target_id = message.reply_to_message.from_user.id
-        amount_arg = parts[1]
-    else:
-        if len(parts) != 3:
-            bot.reply_to(message, "Usage: /deduct <@username|telegram_id> <amount|all>")
-            return
-        target_id = get_target_user(message, parts[1])
-        if not target_id:
-            bot.reply_to(message, "User not found.")
-            return
-        amount_arg = parts[2]
-
-    amount = resolve_amount(target_id, amount_arg)
-    if amount is None:
-        bot.reply_to(message, "Amount must be a number or 'all'.")
-        return
-    new_balance = adjust_balance(target_id, -amount)
-    insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted ₹{amount} \nUser: {target_id}\nBalance: {new_balance}")
-
-
 # ---------- Admin: promote/demote ----------
 @bot.message_handler(commands=["promote"])
 def cmd_promote(message):
@@ -504,7 +569,7 @@ def cmd_minbet(message):
         bot.reply_to(message, "Amount must be a number.")
         return
     set_min_bet(amt)
-    bot.reply_to(message, f"✅ Minimum bet set to ₹{amt} .")
+    bot.reply_to(message, f"✅ Minimum bet set to {amt} coins.")
 
 
 @bot.message_handler(commands=["maxbet"])
@@ -580,16 +645,6 @@ def cmd_rain(message):
         bot.pin_chat_message(sent.chat.id, sent.message_id)
     except Exception:
         pass
-
-    active_rains[sent.message_id] = {"amount": amount, "chat_id": sent.chat.id, "participants": set()}
-
-    def finish_rain():
-        rain = active_rains.pop(sent.message_id, None)
-        if rain is None:
-            return
-        participants = rain["participants"]
-        if not participants:
-            pass
 
     active_rains[sent.message_id] = {"amount": amount, "chat_id": sent.chat.id, "participants": set()}
 
@@ -1095,9 +1150,9 @@ def finalize_match(match_id):
             result="win" if won else "loss", meta={"mode": match["mode"]},
         )
         outcome = (
-            f"🏆 You won the duel! +{payout} rupess.\nBalance: {get_balance(match['player_a'])}"
+            f"🏆 You won the duel! +{payout} coins.\nBalance: {get_balance(match['player_a'])}"
             if won else
-            f"❌ You lost the duel. -{match['bet_a']} rupess.\nBalance: {get_balance(match['player_a'])}"
+            f"❌ You lost the duel. -{match['bet_a']} coins.\nBalance: {get_balance(match['player_a'])}"
         )
         bot.send_message(match["chat_id"], f"📋 Match Summary:\n{summary}\n\n{outcome}")
         return
@@ -1125,8 +1180,8 @@ def finalize_match(match_id):
         match["chat_id"],
         f"📋 Match Summary:\n{summary}\n\n"
         f"🏆 {winner_name} wins the duel!\n"
-        f"{winner_name}: +{winner_payout} rupess\n"
-        f"{loser_name}: -{loser_bet} rupess",
+        f"{winner_name}: +{winner_payout} coins\n"
+        f"{loser_name}: -{loser_bet} coins",
     )
 
 
@@ -1246,7 +1301,7 @@ def handle_tower_cancel(call):
         return
     tower_setups.pop(setup_id, None)
     bot.answer_callback_query(call.id, "Cancelled.")
-    bot.send_message(setup["chat_id"], "❌ Tower game cancelled. No money were deducted.")
+    bot.send_message(setup["chat_id"], "❌ Tower game cancelled. No coins were deducted.")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("twr:"))
@@ -1276,7 +1331,7 @@ def handle_tower_tile(call):
         bot.send_message(
             chat_id,
             f"💥 Boom! You hit a bomb on floor {tower['current_floor'] + 1}.\n"
-            f"Lost {tower['bet_amount']} rupess.\nBalance: {get_balance(telegram_id)}",
+            f"Lost {tower['bet_amount']} coins.\nBalance: {get_balance(telegram_id)}",
         )
         return
 
@@ -1294,7 +1349,7 @@ def handle_tower_tile(call):
         bot.send_message(
             chat_id,
             f"🏆 You reached the top! Floor {TOTAL_FLOORS}/{TOTAL_FLOORS} • {mult}x\n"
-            f"✅ Won {payout} rupess!\nBalance: {get_balance(telegram_id)}",
+            f"✅ Won {payout} coins!\nBalance: {get_balance(telegram_id)}",
         )
         return
 
@@ -1334,176 +1389,9 @@ def handle_tower_cashout(call):
     bot.send_message(
         chat_id,
         f"💰 Cashed out at floor {tower['current_floor']}/{TOTAL_FLOORS} • {mult}x\n"
-        f"✅ Won {payout} rupess!\nBalance: {get_balance(telegram_id)}",
+        f"✅ Won {payout} coins!\nBalance: {get_balance(telegram_id)}",
     )
 
-@bot.callback_query_handler(func=lambda call: call.data in ["deposit", "withdraw"])
-def wallet_buttons(call):
-    bot.answer_callback_query(call.id)
 
-    if call.data == "deposit":
-        cmd_deposit(call.message)
-
-    elif call.data == "withdraw":
-        cmd_withdraw(call.message)
-@bot.message_handler(
-    func=lambda m: m.chat.type == "private",
-    content_types=["text", "photo"]
-)
-def deposit_flow(message):
-    state = deposit_states.get(message.from_user.id)
-
-    print("STATE =", state)
-    print("PHOTO =", bool(message.photo))
-
-    if not state:
-        return
-
-    # Waiting for UTR
-    if state["step"] == "utr":
-
-        utr = message.text.strip()
-
-        if not utr.isdigit() or len(utr) != 12:
-            bot.reply_to(
-                message,
-                "❌ UTR must be exactly 12 digits."
-            )
-            return
-
-        dep = get_pending_deposit(message.from_user.id)
-
-        if not dep:
-            bot.reply_to(message, "Deposit session expired.")
-            return
-
-        save_utr(dep["id"], utr)
-
-        state["step"] = "screenshot"
-
-        bot.reply_to(
-            message,
-            "📷 Now send the payment screenshot."
-        )
-        return
-    if state["step"] == "screenshot":
-
-        if not message.photo:
-            bot.reply_to(
-                message,
-                "❌ Please send the payment screenshot as an image."
-            )
-            return
-
-        dep = get_pending_deposit(message.from_user.id)
-
-        if not dep:
-            bot.reply_to(message, "Deposit session expired.")
-            return
-
-        file_id = message.photo[-1].file_id
-
-        save_screenshot(dep["id"], file_id)
-
-        deposit_states.pop(message.from_user.id, None)
-
-        bot.reply_to(
-            message,
-            "✅ Deposit request submitted!\n\n"
-            "Your payment will be verified by an admin shortly."
-        )
-
-        # Notify all admins
-        admins = select("users", filters={"is_admin": True})
-
-        for admin in admins:
-            try:
-                bot.send_photo(
-                    admin["telegram_id"],
-                    file_id,
-                    caption=(
-                        "💰 *New Deposit Request*\n\n"
-                        f"👤 User: @{message.from_user.username or 'No Username'}\n"
-                        f"🆔 ID: {message.from_user.id}\n"
-                        f"💵 Amount: ₹{dep['amount']}\n"
-                        f"🏦 UTR: {dep['utr']}"
-                    ),
-                    parse_mode="Markdown"
-                )
-            except:
-                pass
-
-        return
-
-    # Waiting for deposit amount
-    if state["step"] == "amount":
-
-        try:
-            amount = float(message.text)
-        except ValueError:
-            bot.reply_to(
-                message,
-                "❌ Please enter a valid amount."
-            )
-            return
-
-        if amount < 50:
-            bot.reply_to(
-                message,
-                "❌ Minimum deposit is ₹50."
-            )
-            return
-
-        create_deposit(
-            message.from_user.id,
-            message.from_user.username,
-            amount
-        )
-
-        state["amount"] = amount
-        state["step"] = "paid"
-
-        markup = InlineKeyboardMarkup()
-
-        markup.add(
-            InlineKeyboardButton(
-                "✅ I Have Paid",
-                callback_data="deposit_paid"
-            )
-        )
-
-        bot.send_photo(
-            message.chat.id,
-            open("qr.jpg", "rb"),
-            caption=(
-                f"💰 Deposit Amount: ₹{amount}\n\n"
-                f"UPI ID:\n"
-                f"`piyushraao@fam`\n\n"
-                f"Scan the QR or pay using the UPI ID above."
-            ),
-            reply_markup=markup,
-            parse_mode="Markdown"
-        )
-        return
-@bot.callback_query_handler(func=lambda call: call.data == "deposit_paid")
-def deposit_paid(call):
-
-    bot.answer_callback_query(call.id)
-
-    state = deposit_states.get(call.from_user.id)
-
-    if not state:
-        bot.send_message(
-            call.message.chat.id,
-            "❌ Deposit session expired.\nUse /deposit again."
-        )
-        return
-
-    state["step"] = "utr"
-
-    bot.send_message(
-        call.message.chat.id,
-        "💳 Please send your 12-digit UTR / Transaction ID."
-    )
 print(f"{CASINO_NAME} bot running...")
 bot.infinity_polling()
