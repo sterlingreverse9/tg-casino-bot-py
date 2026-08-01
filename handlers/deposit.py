@@ -38,9 +38,7 @@ def cmd_deposit(message):
     ensure_user(message)
     deposit_states[message.from_user.id] = {"step": "amount"}
     caption = (
-        f"💰 Enter deposit amount.
-
-Minimum: 50)"
+        f"💰 Enter deposit amount. \nMinimum: 50)"
     )
     try:
         with open("/storage/emulated/0/Download/qr.jpg", "rb") as photo:
