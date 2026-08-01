@@ -52,7 +52,7 @@ def cmd_me(message):
 def cmd_wallet(message):
     ensure_user(message)
     balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: {balance} coins")
+    bot.reply_to(message, f"💰 Your balance: ₹{balance} ")
 
 
 @bot.message_handler(commands=["rakeback"])
@@ -69,13 +69,13 @@ def cmd_rakeback(message):
         note = f"(1% rate — thanks for having {PROMO_TAG} in your name!)"
     else:
         note = f"(0.5% rate — add {PROMO_TAG} to your name for 1%!)"
-    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} coins {note}\nBalance: {new_balance}")
+    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} rupess {note}\nBalance: ₹{new_balance}")
 
 
 @bot.message_handler(commands=["housebal", "house"])
 def cmd_housebal(message):
     bal = get_house_balance()
-    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: {bal} coins")
+    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: ₹{bal} ")
 
 
 @bot.message_handler(commands=["history"])
