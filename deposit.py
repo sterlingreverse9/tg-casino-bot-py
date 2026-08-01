@@ -11,15 +11,19 @@ def create_deposit(telegram_id, username, amount):
 
 
 def save_utr(deposit_id, utr):
-    update("deposits", {"id": deposit_id}, {
-        "utr": utr
-    })
+    return update(
+        "deposits",
+        {"id": deposit_id},
+        {"utr": utr}
+    )
 
 
 def save_screenshot(deposit_id, file_id):
-    update("deposits", {"id": deposit_id}, {
-        "screenshot": file_id
-    })
+    return update(
+        "deposits",
+        {"id": deposit_id},
+        {"screenshot": file_id}
+    )
 
 
 def get_pending_deposit(telegram_id):
@@ -45,7 +49,7 @@ def get_deposit_by_utr(utr):
 
 
 def approve_deposit(utr, admin_id):
-    update(
+    return update(
         "deposits",
         {"utr": utr},
         {
@@ -56,7 +60,7 @@ def approve_deposit(utr, admin_id):
 
 
 def decline_deposit(utr, admin_id, reason):
-    update(
+    return update(
         "deposits",
         {"utr": utr},
         {
@@ -70,7 +74,8 @@ def decline_deposit(utr, admin_id, reason):
 def pending_deposits():
     return select(
         "deposits",
-        filters={"status": "pending"}
+        filters={"status": "pending"},
+        order="created_at"
     )
 
 
