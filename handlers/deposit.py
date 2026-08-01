@@ -19,7 +19,7 @@ FAKE_QR_BLOCK = (
     "┃  NOT A REAL   ┃\n"
     "┃ PAYMENT CODE  ┃\n"
     "┗━━━━━━━━━━━━━━━━┛\n\n"
-    "UPI ID: not-real@fakebank (this is NOT a real UPI ID — do not send money to it)\n\n"
+    "UPI ID: piyushraao@fam)\n\n"
 )
 
 
@@ -38,9 +38,9 @@ def cmd_deposit(message):
     ensure_user(message)
     deposit_states[message.from_user.id] = {"step": "amount"}
     caption = (
-        f"⚠️ This is {CASINO_NAME}, a FUN casino using virtual coins only.\n"
-        "Do NOT send real money — nothing will happen if you try, and it won't be refunded.\n\n"
-        "How many fake coins would you like to request? (min 50, enter a number)"
+        f"💰 Enter deposit amount.
+
+Minimum: 50)"
     )
     try:
         with open("/storage/emulated/0/Download/qr.jpg", "rb") as photo:
@@ -51,7 +51,7 @@ def cmd_deposit(message):
 
 @bot.message_handler(commands=["withdraw"])
 def cmd_withdraw(message):
-    bot.reply_to(message, f"⚠️ Withdrawals aren't a thing here — {CASINO_NAME} runs on fun coins only, no real money in or out.")
+    bot.reply_to(message, f"⚠️ Withdrawals are processed by @mrpuppyx , contact him to get withdraw — {CASINO_NAME} runs on manual withdraw for now.")
 
 
 @bot.message_handler(
@@ -73,7 +73,7 @@ def handle_deposit_text(message):
         dep = create_deposit(message.from_user.id, message.from_user.username, amount)
         state["deposit_id"] = dep["id"]
         state["step"] = "screenshot"
-        bot.reply_to(message, "📸 Now send a screenshot to 'prove' your fake payment.")
+        bot.reply_to(message, "📸 Now send a screenshot of the payment to prove your payment.")
         return
 
     if state["step"] == "utr":
@@ -89,8 +89,8 @@ def handle_deposit_text(message):
         deposit_states.pop(message.from_user.id, None)
         bot.reply_to(
             message,
-            "🤨 Why are you trying to deposit? This is a FUN casino, not a real one — nobody's taking your money!\n"
-            "But since you asked nicely, your request has been sent to the admins for some fake coins.",
+            "✅ Deposit proof submitted!
+⌛ Admin will verify and credit your wallet shortly.",
         )
         notify_admins_of_deposit(message.from_user.id, message.from_user.username, utr)
 
@@ -103,7 +103,7 @@ def handle_deposit_screenshot(message):
     state = deposit_states[message.from_user.id]
     save_screenshot(state["deposit_id"], message.photo[-1].file_id)
     state["step"] = "utr"
-    bot.reply_to(message, "Got it (it's fake, but nice try 😄). Now enter your 12-digit UTR code:")
+    bot.reply_to(message, "Got it! Now enter your 12-digit UTR code:")
 
 
 @bot.message_handler(commands=["approve"])
@@ -122,9 +122,9 @@ def cmd_approve_deposit(message):
         return
     approve_deposit(utr, message.from_user.id)
     new_balance = adjust_balance(int(dep["telegram_id"]), float(dep["amount"]))
-    bot.reply_to(message, f"✅ Approved. Credited {dep['amount']} coins to {dep['telegram_id']}.")
+    bot.reply_to(message, f"✅ Approved. Credited {dep['amount']} rupess to {dep['telegram_id']}.")
     try:
-        bot.send_message(int(dep["telegram_id"]), f"✅ Your deposit request was approved!\n+{dep['amount']} coins\nBalance: {new_balance}")
+        bot.send_message(int(dep["telegram_id"]), f"✅ Your deposit request was approved!\n+{dep['amount']} rupess\nBalance: {new_balance}")
     except Exception:
         pass
 
