@@ -70,10 +70,10 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
     if won:
         bot.send_message(
             chat_id,
-            f"🎲 Rolled {roll}!\nYou bet on {label}\n✅ You won {payout} coins!\nBalance: {new_balance}",
+            f"🎲 Rolled {roll}!\nYou bet on {label}\n✅ You won ₹{payout} !\nBalance: {new_balance}",
         )
     else:
         bot.send_message(
             chat_id,
-            f"🎲 Rolled {roll}!\nYou bet on {label}\n❌ You lost {bet_amount} coins.\nBalance: {new_balance}",
+            f"🎲 Rolled {roll}!\nYou bet on {label}\n❌ You lost ₹{bet_amount} .\nBalance: {new_balance}",
         )
