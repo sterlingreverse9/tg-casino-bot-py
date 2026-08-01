@@ -1346,9 +1346,11 @@ def wallet_buttons(call):
 
     elif call.data == "withdraw":
         cmd_withdraw(call.message)
-@bot.message_handler(func=lambda m: m.chat.type == "private")
+@bot.message_handler(
+    func=lambda m: m.chat.type == "private",
+    content_types=["text", "photo"]
+)
 def deposit_flow(message):
-
     state = deposit_states.get(message.from_user.id)
 
     print("STATE =", state)
