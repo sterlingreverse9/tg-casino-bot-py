@@ -87,8 +87,7 @@ def handle_deposit_text(message):
         deposit_states.pop(message.from_user.id, None)
         bot.reply_to(
             message,
-            "✅ Deposit proof submitted!
-⌛ Admin will verify and credit your wallet shortly.",
+            "✅ Deposit proof submitted! \n⌛ Admin will verify and credit your wallet shortly.",
         )
         notify_admins_of_deposit(message.from_user.id, message.from_user.username, utr)
 
