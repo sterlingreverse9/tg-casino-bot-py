@@ -14,7 +14,6 @@ EVEN_MONEY_CHOICES = {
 NUMBER_CHOICES = {"1", "2", "3", "4", "5", "6"}
 ALL_CHOICES = set(EVEN_MONEY_CHOICES.keys()) | NUMBER_CHOICES
 
-# Formatted display names as per target output
 CHOICE_DISPLAY = {
     "low": "1 • 2 • 3 (Low)",
     "high": "4 • 5 • 6 (High)",
@@ -30,28 +29,28 @@ CHOICE_DISPLAY = {
 
 
 def send_selection_keyboard(bot, chat_id, telegram_id: int, bet_amount: float, username: str = None):
-    """Sends the choice selection menu if no choice was passed in command."""
+    """Sends menu message with inline keyboard containing user handle."""
     user_ref = f"@{username}" if username else f"[{telegram_id}](tg://user?id={telegram_id})"
     
     markup = InlineKeyboardMarkup(row_width=3)
     markup.add(
-        InlineKeyboardButton("Low", callback_data=f"dr_{bet_amount}_low"),
-        InlineKeyboardButton("High", callback_data=f"dr_{bet_amount}_high"),
+        InlineKeyboardButton("Low", callback_data=f"dr_{telegram_id}_{bet_amount}_low"),
+        InlineKeyboardButton("High", callback_data=f"dr_{telegram_id}_{bet_amount}_high"),
     )
     markup.add(
-        InlineKeyboardButton("Odd", callback_data=f"dr_{bet_amount}_odd"),
-        InlineKeyboardButton("Even", callback_data=f"dr_{bet_amount}_even"),
+        InlineKeyboardButton("Odd", callback_data=f"dr_{telegram_id}_{bet_amount}_odd"),
+        InlineKeyboardButton("Even", callback_data=f"dr_{telegram_id}_{bet_amount}_even"),
     )
     markup.add(
-        *[InlineKeyboardButton(str(i), callback_data=f"dr_{bet_amount}_{i}") for i in range(1, 7)]
+        *[InlineKeyboardButton(str(i), callback_data=f"dr_{telegram_id}_{bet_amount}_{i}") for i in range(1, 7)]
     )
 
-    text = f"🎲 Dice Roll (DR) • ₹{int(bet_amount) if bet_amount.is_integer() else bet_amount}\n\n👤 {user_ref} — pick one:"
+    formatted_bet = int(bet_amount) if bet_amount.is_integer() else bet_amount
+    text = f"🎲 Dice Roll (DR)  ₹{formatted_bet}\n\n👤 {user_ref} — pick one:"
     bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
 
 
 def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: str = None, username: str = None):
-    # If choice is missing, send inline selection buttons
     if not choice:
         send_selection_keyboard(bot, chat_id, telegram_id, bet_amount, username)
         return
@@ -77,11 +76,10 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
 
     adjust_balance(telegram_id, -bet_amount)
 
-    # Send dice animation
     dice_message = bot.send_dice(chat_id, emoji="🎲")
     roll = dice_message.dice.value
 
-    # Wait 3 seconds for dice animation to complete
+    # Wait 3 seconds for dice roll animation
     time.sleep(3)
 
     if choice in EVEN_MONEY_CHOICES:
@@ -132,24 +130,30 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
         bot.send_message(chat_id, result_text, parse_mode="Markdown")
 
 
-# Add Callback Handler for the Inline Keyboard buttons
 def register_dice_callback_handler(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("dr_"))
     def handle_dice_callback(call):
-        _, bet_str, choice = call.data.split("_")
-        bet_amount = float(bet_str)
+        _, owner_id_str, bet_str, choice = call.data.split("_")
+        owner_id = int(owner_id_str)
         
-        # Answer callback to clear loading state on button
+        # Ensure only the player who initiated can click the buttons
+        if call.from_user.id != owner_id:
+            bot.answer_callback_query(call.id, "This menu isn't for you!", show_alert=True)
+            return
+
         bot.answer_callback_query(call.id)
-        
-        # Remove keyboard from previous message
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-        
+
+        # Delete the message with inline buttons completely
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+
         play_dice_roll(
             bot=bot,
             chat_id=call.message.chat.id,
             telegram_id=call.from_user.id,
-            bet_amount=bet_amount,
+            bet_amount=float(bet_str),
             choice=choice,
             username=call.from_user.username
         )
