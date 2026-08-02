@@ -31,7 +31,7 @@ def cmd_add(message):
     get_or_create_user(target_id, None)
     new_balance = adjust_balance(target_id, amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added {amount} rupees\nUser: {target_id}\nNew balance: ₹{new_balance}")
+    bot.reply_to(message, f"✅ Added {amount} coins\nUser: {target_id}\nNew balance: {new_balance}")
 
 
 @bot.message_handler(commands=["deduct"])
@@ -62,7 +62,7 @@ def cmd_deduct(message):
         return
     new_balance = adjust_balance(target_id, -amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted {amount} rupees\nUser: {target_id}\nBalance: ₹{new_balance}")
+    bot.reply_to(message, f"✅ Deducted {amount} coins\nUser: {target_id}\nBalance: {new_balance}")
 
 
 # ---------- Admin: promote/demote ----------
@@ -111,7 +111,7 @@ def cmd_updatehb(message):
     amount = float(parts[1])
     update("house", {"id": 1}, {"balance": amount})
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "updatehb", "amount": amount})
-    bot.reply_to(message, f"🏦 House balance set to ₹{amount}.")
+    bot.reply_to(message, f"🏦 House balance set to {amount}.")
 
 
 @bot.message_handler(commands=["minbet"])
@@ -129,7 +129,7 @@ def cmd_minbet(message):
         bot.reply_to(message, "Amount must be a number.")
         return
     set_min_bet(amt)
-    bot.reply_to(message, f"✅ Minimum bet set to ₹{amt} .")
+    bot.reply_to(message, f"✅ Minimum bet set to {amt} coins.")
 
 
 @bot.message_handler(commands=["maxbet"])
@@ -182,7 +182,7 @@ def cmd_resetld(message):
     bot.reply_to(message, "🔄 Leaderboard/wager stats reset for everyone.")
 
 
-@bot.message_handler(commands=["killbal" , "killeverybalance" ])
+@bot.message_handler(commands=["killbal"])
 def cmd_killbal(message):
     if not is_admin(message.from_user.id):
         bot.reply_to(message, "You don't have permission to use this command.")
