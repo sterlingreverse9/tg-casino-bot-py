@@ -4,8 +4,6 @@ from wallet import adjust_balance, record_bet
 from settings import get_house_edge
 from helpers import announce_win
 
-MIN_BET = 10
-
 
 def decide_round_winner(a_sum: int, b_sum: int, mode: str = "classic"):
     if a_sum == b_sum:
@@ -33,7 +31,7 @@ def start_dice_game_step(bot, chat_id, telegram_id: int, bet_amount: float, roun
         "current_round": 1,
         "player_wins": 0,
         "bot_wins": 0,
-        "round_history": [],  # Track round summaries
+        "round_history": [],
     }
 
     prompt_text = (
@@ -95,7 +93,6 @@ def handle_player_dice_turn(bot, message, state):
 
     state["round_history"].append(round_res)
 
-    # Tiebreaker handling for equal score
     if state["current_round"] >= state["total_rounds"] and state["player_wins"] == state["bot_wins"]:
         state["current_round"] += 1
         bot.send_message(
@@ -133,11 +130,11 @@ def finish_dice_game(bot, state):
     username = state["username"]
     user_ref = state["user_ref"]
 
-    # Calculate multiplier properly based on decimal vs percentage
-    raw_edge = get_house_edge()
+    # Normalize house edge (e.g. 0.20 or 20.0 both calculate to 0.20 decimal)
+    raw_edge = float(get_house_edge())
     edge_decimal = raw_edge if raw_edge < 1.0 else (raw_edge / 100.0)
-    multiplier = 2.0 * (1.0 - edge_decimal)
-    
+    multiplier = round(2.0 * (1.0 - edge_decimal), 2)
+
     payout = round(bet_amount * multiplier, 2) if won else 0
 
     if won:
