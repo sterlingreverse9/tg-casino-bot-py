@@ -124,7 +124,7 @@ def handle_deposit_paid(call):
         bot.send_message(call.message.chat.id, "Session expired — use /deposit again.")
         return
     state["step"] = "utr"
-    bot.send_message(call.message.chat.id, \n\nNow enter your 12-digit UTR code :")
+    bot.send_message(call.message.chat.id, \nNow enter your 12-digit UTR code :")
 
 
 @bot.message_handler(
