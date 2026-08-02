@@ -29,9 +29,12 @@ CHOICE_DISPLAY = {
 
 
 def send_selection_keyboard(bot, chat_id, telegram_id: int, bet_amount: float, username: str = None):
-    """Sends menu message with inline keyboard containing user handle."""
-    user_ref = f"@{username}" if username else f"[{telegram_id}](tg://user?id={telegram_id})"
-    
+    """Sends menu message with working HTML user mention."""
+    if username:
+        user_ref = f"@{username}"
+    else:
+        user_ref = f'<a href="tg://user?id={telegram_id}">User</a>'
+
     markup = InlineKeyboardMarkup(row_width=3)
     markup.add(
         InlineKeyboardButton("Low", callback_data=f"dr_{telegram_id}_{bet_amount}_low"),
@@ -46,8 +49,8 @@ def send_selection_keyboard(bot, chat_id, telegram_id: int, bet_amount: float, u
     )
 
     formatted_bet = int(bet_amount) if bet_amount.is_integer() else bet_amount
-    text = f"🎲 Dice Roll (DR)  ₹{formatted_bet}\n\n👤 {user_ref} — pick one:"
-    bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+    text = f"🎲 <b>Dice Roll (DR)  ₹{formatted_bet}</b>\n\n👤 {user_ref} — pick one:"
+    bot.send_message(chat_id, text, reply_markup=markup, parse_mode="HTML")
 
 
 def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: str = None, username: str = None):
@@ -79,7 +82,7 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
     dice_message = bot.send_dice(chat_id, emoji="🎲")
     roll = dice_message.dice.value
 
-    # Wait 3 seconds for dice roll animation
+    # Wait 3 seconds for dice animation
     time.sleep(3)
 
     if choice in EVEN_MONEY_CHOICES:
@@ -102,7 +105,11 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
         meta={"choice": choice, "roll": roll},
     )
 
-    user_ref = f"@{username}" if username else f"[{telegram_id}](tg://user?id={telegram_id})"
+    if username:
+        user_ref = f"@{username}"
+    else:
+        user_ref = f'<a href="tg://user?id={telegram_id}">User</a>'
+
     formatted_bet = int(bet_amount) if bet_amount.is_integer() else bet_amount
     formatted_choice = CHOICE_DISPLAY.get(choice, choice)
 
@@ -111,49 +118,54 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
         formatted_payout = int(payout) if payout.is_integer() else payout
         
         result_text = (
-            f"⚡ Dice Roll (DR) • ₹{formatted_bet}\n\n"
+            f"⚡ <b>Dice Roll (DR) • ₹{formatted_bet}</b>\n\n"
             f"👤 {user_ref}\n\n"
-            f"🎯 You Chose:\n{formatted_choice}\n\n"
-            f"🎲 Outcome:\n{roll}\n\n"
-            f"💰 You Won ₹{formatted_payout} ({multiplier:.2f}x)"
+            f"🎯 <b>You Chose:</b>\n{formatted_choice}\n\n"
+            f"🎲 <b>Outcome:</b>\n{roll}\n\n"
+            f"💰 <b>You Won ₹{formatted_payout} ({multiplier:.2f}x)</b>"
         )
-        bot.send_message(chat_id, result_text, parse_mode="Markdown")
+        bot.send_message(chat_id, result_text, parse_mode="HTML")
         announce_win(username or str(telegram_id), payout, "Dice Roll")
     else:
         result_text = (
-            f"⚡ Dice Roll (DR) • ₹{formatted_bet}\n\n"
+            f"⚡ <b>Dice Roll (DR) • ₹{formatted_bet}</b>\n\n"
             f"👤 {user_ref}\n\n"
-            f"🎯 You Chose:\n{formatted_choice}\n\n"
-            f"🎲 Outcome:\n{roll}\n\n"
-            f"❌ You Lost ₹{formatted_bet}"
+            f"🎯 <b>You Chose:</b>\n{formatted_choice}\n\n"
+            f"🎲 <b>Outcome:</b>\n{roll}\n\n"
+            f"❌ <b>You Lost ₹{formatted_bet}</b>"
         )
-        bot.send_message(chat_id, result_text, parse_mode="Markdown")
+        bot.send_message(chat_id, result_text, parse_mode="HTML")
 
 
 def register_dice_callback_handler(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("dr_"))
     def handle_dice_callback(call):
-        _, owner_id_str, bet_str, choice = call.data.split("_")
-        owner_id = int(owner_id_str)
-        
-        # Ensure only the player who initiated can click the buttons
-        if call.from_user.id != owner_id:
-            bot.answer_callback_query(call.id, "This menu isn't for you!", show_alert=True)
-            return
-
-        bot.answer_callback_query(call.id)
-
-        # Delete the message with inline buttons completely
         try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
-            pass
+            _, owner_id_str, bet_str, choice = call.data.split("_")
+            owner_id = int(owner_id_str)
+            
+            # Security check
+            if call.from_user.id != owner_id:
+                bot.answer_callback_query(call.id, "This menu isn't for you!", show_alert=True)
+                return
 
-        play_dice_roll(
-            bot=bot,
-            chat_id=call.message.chat.id,
-            telegram_id=call.from_user.id,
-            bet_amount=float(bet_str),
-            choice=choice,
-            username=call.from_user.username
-        )
+            bot.answer_callback_query(call.id)
+
+            # Guaranteed Deletion: Delete message FIRST before processing game logic
+            try:
+                bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+            except Exception:
+                # Fallback: remove inline markup if deletion is restricted by Telegram permissions
+                bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+
+            # Extract user parameters explicitly from callback query context
+            play_dice_roll(
+                bot=bot,
+                chat_id=call.message.chat.id,
+                telegram_id=call.from_user.id,
+                bet_amount=float(bet_str),
+                choice=choice,
+                username=call.from_user.username
+            )
+        except Exception as e:
+            print(f"Error handling callback: {e}")
