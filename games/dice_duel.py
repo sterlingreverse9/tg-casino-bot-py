@@ -27,81 +27,11 @@ def decide_round_winner(a_sum: int, b_sum: int, mode: str = "classic"):
     return "a" if a_sum > b_sum else "b"
 
 
-def send_dice_help(bot, chat_id):
-    """Sends the help menu message when user sends only /dice."""
-    help_text = (
-        "<b>🎲 Dice</b>\n\n"
-        "<b>vs Bot:</b>\n"
-        "<code>/dice 50</code> — 1 round\n"
-        "<code>/dice 50 3</code> — 3 rounds\n\n"
-        "<b>vs Player:</b>\n"
-        "<code>/dice @user 50</code> — challenge a player\n"
-        "<code>/dice @user 50 3</code> — with amount only; rounds & mode selected via buttons"
-    )
-    bot.send_message(chat_id, help_text, parse_mode="HTML")
-
-
-def handle_dice_command(bot, message):
-    args = message.text.split()
-    chat_id = message.chat.id
-    telegram_id = message.from_user.id
-    username = message.from_user.username
-    user_ref = f"@{username}" if username else message.from_user.first_name
-
-    # Case 1: Send help menu if user sends /dice
-    if len(args) == 1:
-        send_dice_help(bot, chat_id)
-        return
-
-    # Check if target is a PvP challenge (e.g. /dice @user 50)
-    if args[1].startswith("@"):
-        bot.send_message(chat_id, "PvP challenges feature coming soon!")
-        return
-
-    # Parse Bet Amount
-    try:
-        bet_amount = float(args[1])
-    except ValueError:
-        bot.send_message(chat_id, "Invalid bet amount.")
-        return
-
-    # Parse Rounds (default = 1)
-    rounds = 1
-    if len(args) >= 3:
-        try:
-            rounds = int(args[2])
-            if rounds < 1 or rounds > 5:
-                bot.send_message(chat_id, "Rounds must be between 1 and 5.")
-                return
-        except ValueError:
-            bot.send_message(chat_id, "Invalid number of rounds.")
-            return
-
-    # Balance and Bet Checks
-    balance = get_balance(telegram_id)
-    min_bet = max(MIN_BET, get_min_bet())
-    max_bet = get_max_bet(get_house_balance())
-
-    if balance < bet_amount:
-        formatted_bal = int(balance) if balance.is_integer() else balance
-        bot.send_message(
-            chat_id,
-            f"❌ {user_ref} Not quite enough in the tank 💸 — you've got ₹{formatted_bal}",
-            parse_mode="HTML"
-        )
-        return
-
-    if bet_amount < min_bet:
-        bot.send_message(chat_id, f"Minimum bet is ₹{min_bet}.")
-        return
-
-    if bet_amount > max_bet:
-        bot.send_message(chat_id, f"Maximum bet is ₹{round(max_bet, 2)}.")
-        return
-
-    # Deduct Bet
+def run_dice_vs_bot(bot, chat_id, telegram_id: int, bet_amount: float, rounds: int, username: str = None):
+    """Executes the game loop against the Bot."""
     adjust_balance(telegram_id, -bet_amount)
 
+    user_ref = f"@{username}" if username else f'<a href="tg://user?id={telegram_id}">User</a>'
     formatted_bet = int(bet_amount) if bet_amount.is_integer() else bet_amount
 
     # Send Prompt Message
@@ -111,7 +41,6 @@ def handle_dice_command(bot, message):
     )
     bot.send_message(chat_id, prompt_text, parse_mode="HTML")
 
-    # Game Loop for Rounds
     player_wins = 0
     bot_wins = 0
 
@@ -127,11 +56,11 @@ def handle_dice_command(bot, message):
         b_dice = bot.send_dice(chat_id, emoji="🎲")
         b_roll = b_dice.dice.value
 
-        time.sleep(3)  # Animation wait time
+        time.sleep(3)  # Wait for dice animation
 
         winner = decide_round_winner(p_roll, b_roll, mode="classic")
         while winner is None:
-            # Re-roll in case of tie
+            # Tie re-rolls
             p_dice = bot.send_dice(chat_id, emoji="🎲")
             p_roll = p_dice.dice.value
             b_dice = bot.send_dice(chat_id, emoji="🎲")
@@ -144,7 +73,6 @@ def handle_dice_command(bot, message):
         else:
             bot_wins += 1
 
-    # Final Outcome Processing
     won = player_wins > bot_wins
     payout = (bet_amount * 2) if won else 0
 
@@ -161,7 +89,6 @@ def handle_dice_command(bot, message):
         meta={"rounds": rounds, "player_score": player_wins, "bot_score": bot_wins},
     )
 
-    # Result Summary Message
     if won:
         formatted_payout = int(payout) if payout.is_integer() else payout
         bot.send_message(
