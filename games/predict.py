@@ -17,13 +17,13 @@ def play_predict_number(bot, chat_id, telegram_id: int, bet_amount: float, guess
     max_bet = get_max_bet(get_house_balance())
 
     if bet_amount < min_bet:
-        bot.send_message(chat_id, f"Minimum bet is {min_bet} coins.")
+        bot.send_message(chat_id, f"Minimum bet is ₹{min_bet} .")
         return
     if bet_amount > max_bet:
         bot.send_message(chat_id, f"Maximum bet is {round(max_bet, 2)} coins.")
         return
     if bet_amount > balance:
-        bot.send_message(chat_id, f"Not enough balance. Your balance: {balance}")
+        bot.send_message(chat_id, f"Not enough balance. Your balance: ₹{balance}")
         return
 
     adjust_balance(telegram_id, -bet_amount)
@@ -48,12 +48,12 @@ def play_predict_number(bot, chat_id, telegram_id: int, bet_amount: float, guess
         bot.send_message(
             chat_id,
             f"🔮 The number was {number}! You guessed {guess} — spot on!\n"
-            f"✅ You won ₹{payout} ! ({PAYOUT_MULTIPLIER}x)\nBalance: {new_balance}",
+            f"✅ You won ₹{payout} rupess! ({PAYOUT_MULTIPLIER}x)\nBalance: {new_balance}",
         )
         announce_win(display_name or str(telegram_id), payout, "Predict Number")
     else:
         bot.send_message(
             chat_id,
             f"🔮 The number was {number}. You guessed {guess}.\n"
-            f"❌ You lost {bet_amount} coins.\nBalance: ₹{new_balance}",
+            f"❌ You lost ₹{bet_amount} rupeess.\nBalance: ₹{new_balance}",
         )
