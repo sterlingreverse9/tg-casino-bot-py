@@ -4,6 +4,8 @@ import time
 from wallet import get_balance, adjust_balance, record_bet
 from game_math import payout_for
 from helpers import announce_win, format_display_name
+from wallet import get_house_balance
+from settings import get_min_bet, get_max_bet
 
 WIN_CHANCE = 0.5
 
