@@ -5,8 +5,10 @@ from config import CASINO_NAME
 from wallet import adjust_balance
 from game_status import is_game_enabled, set_game_enabled
 from middleware.admin import is_admin
-from helpers import ensure_user, notify_admins_of_deposit
+from helpers import ensure_user
 from state import deposit_states
+from settings import get_deposit_upi, set_deposit_upi
+from referral import apply_deposit_reward
 from deposit import (
     create_deposit,
     save_utr,
@@ -19,25 +21,43 @@ from deposit import (
     deposit_history,
 )
 
-FAKE_QR_BLOCK = (
-    "┏━━━━━━━━━━━━━━━━━━━━━━┓\n"
-    "┃       🚫 FAKE QR      ┃\n"
-    "┃     NOT A REAL QR    ┃\n"
-    "┗━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
-    "UPI ID: piyushraao@fam"
-)
+
+@bot.message_handler(commands=["changeupi"])
+def cmd_changeupi(message):
+
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission.")
+        return
+
+    parts = message.text.split(maxsplit=1)
+
+    if len(parts) != 2:
+        bot.reply_to(
+            message,
+            "Usage:\n/changeupi <upi_id>"
+        )
+        return
+
+    set_deposit_upi(parts[1])
+
+    bot.reply_to(
+        message,
+        f"✅ Deposit UPI updated to:\n`{parts[1]}`",
+        parse_mode="Markdown"
+    )
 
 
 @bot.message_handler(commands=["deposit", "depo"])
 def cmd_deposit(message):
 
     if not is_game_enabled("deposit"):
-        bot.reply_to(message, "❌ Deposits are currently disabled.")
+        bot.reply_to(message, "❌ Deposits are currently paused.")
         return
 
     if message.chat.type != "private":
 
         markup = InlineKeyboardMarkup()
+
         markup.add(
             InlineKeyboardButton(
                 "💬 Open Deposit",
@@ -60,8 +80,11 @@ def cmd_deposit(message):
 
     bot.reply_to(
         message,
-        "💰 Enter deposit amount.\n\nMinimum: ₹50"
+        "💰 Enter the amount you want to deposit.\n\n"
+        "Minimum deposit: ₹50"
     )
+
+
 @bot.message_handler(commands=["withdraw"])
 def cmd_withdraw(message):
 
@@ -85,10 +108,9 @@ def cmd_withdraw(message):
 
     bot.reply_to(
         message,
-        f"⚠️ Withdrawals are processed manually.\n\nContact @mrpuppyx to withdraw from {CASINO_NAME}."
+        f"⚠️ Withdrawals are processed manually.\n\n"
+        f"Contact @mrpuppyx to withdraw from {CASINO_NAME}."
     )
-
-
 @bot.message_handler(
     func=lambda m:
         m.from_user.id in deposit_states
@@ -100,13 +122,12 @@ def handle_deposit_text(message):
 
     state = deposit_states[message.from_user.id]
 
-    # STEP 1 - Amount
     if state["step"] == "amount":
 
         try:
             amount = float(message.text.strip())
         except ValueError:
-            bot.reply_to(message, "❌ Enter a valid amount.")
+            bot.reply_to(message, "❌ Please enter a valid amount.")
             return
 
         if amount < 50:
@@ -128,39 +149,48 @@ def handle_deposit_text(message):
         markup.add(
             InlineKeyboardButton(
                 "✅ I Have Paid",
-                callback_data="deposit_paid"
+                callback_data="deposit_paid",
             )
         )
 
+        upi = get_deposit_upi()
+
         try:
             with open("/storage/emulated/0/Download/qr.jpg", "rb") as photo:
+
                 bot.send_photo(
                     message.chat.id,
                     photo,
                     caption=(
-                        f"💰 Deposit Amount: ₹{amount}\n\n"
-                        "UPI ID:\n"
-                        "`piyushraao@fam`\n\n"
-                        "After payment tap 'I Have Paid'."
+                        f"💰 *Deposit Amount:* ₹{amount}\n\n"
+                        f"🏦 *UPI ID:*\n"
+                        f"`{upi}`\n\n"
+                        "After payment press *I Have Paid*."
                     ),
                     parse_mode="Markdown",
-                    reply_markup=markup
+                    reply_markup=markup,
                 )
+
         except FileNotFoundError:
+
             bot.send_message(
                 message.chat.id,
-                FAKE_QR_BLOCK,
-                reply_markup=markup
+                (
+                    f"💰 Deposit Amount: ₹{amount}\n\n"
+                    f"UPI ID:\n`{upi}`"
+                ),
+                parse_mode="Markdown",
+                reply_markup=markup,
             )
 
         return
 
-    # STEP 2 - UTR
     if state["step"] == "utr":
 
         utr = message.text.strip()
 
-        if len(utr) != 12 or not utr.isdigit():
+        if not utr.isdigit() or len(utr) != 12:
+
             bot.reply_to(
                 message,
                 "❌ UTR must contain exactly 12 digits."
@@ -170,12 +200,14 @@ def handle_deposit_text(message):
         try:
             save_utr(
                 state["deposit_id"],
-                utr
+                utr,
             )
+
         except Exception:
+
             bot.reply_to(
                 message,
-                "❌ That UTR already exists."
+                "❌ This UTR already exists."
             )
             return
 
@@ -183,7 +215,7 @@ def handle_deposit_text(message):
 
         bot.reply_to(
             message,
-            "📷 Now send the payment screenshot."
+            "📷 Now send your payment screenshot."
         )
 
         return
@@ -198,6 +230,13 @@ def deposit_paid(call):
         bot.send_message(
             call.message.chat.id,
             "❌ Deposit session expired.\nUse /deposit again."
+        )
+        return
+
+    if state["step"] != "paid":
+        bot.send_message(
+            call.message.chat.id,
+            "❌ Invalid deposit state."
         )
         return
 
@@ -221,7 +260,7 @@ def handle_deposit_screenshot(message):
 
     save_screenshot(
         state["deposit_id"],
-        message.photo[-1].file_id
+        message.photo[-1].file_id,
     )
 
     dep = get_pending_deposit(message.from_user.id)
@@ -231,174 +270,44 @@ def handle_deposit_screenshot(message):
     bot.reply_to(
         message,
         "✅ Deposit request submitted!\n\n"
-        "Your payment will be verified by an admin shortly."
+        "Your payment will be reviewed by an admin shortly."
     )
 
     admins = select(
         "users",
-        filters={"is_admin": True}
+        filters={"is_admin": True},
     )
 
     for admin in admins:
+
         try:
+
+            markup = InlineKeyboardMarkup()
+
+            markup.row(
+                InlineKeyboardButton(
+                    "✅ Approve",
+                    callback_data=f"approve_{dep['utr']}"
+                ),
+                InlineKeyboardButton(
+                    "❌ Decline",
+                    callback_data=f"decline_{dep['utr']}"
+                )
+            )
+
             bot.send_photo(
                 admin["telegram_id"],
                 message.photo[-1].file_id,
                 caption=(
-                    "💰 *New Deposit Request*\n\n"
+                    "💰 *NEW DEPOSIT REQUEST*\n\n"
                     f"👤 User: @{message.from_user.username or 'No Username'}\n"
-                    f"🆔 ID: {message.from_user.id}\n"
+                    f"🆔 ID: `{message.from_user.id}`\n"
                     f"💵 Amount: ₹{dep['amount']}\n"
-                    f"🏦 UTR: {dep['utr']}\n\n"
-                    f"/approve {dep['utr']}\n"
-                    f"/decline {dep['utr']} <reason>"
+                    f"🏦 UTR: `{dep['utr']}`"
                 ),
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=markup,
             )
+
         except Exception:
             pass
-@bot.message_handler(commands=["approve"])
-def cmd_approve_deposit(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-
-    parts = message.text.split()
-
-    if len(parts) != 2:
-        bot.reply_to(message, "Usage: /approve <utr>")
-        return
-
-    utr = parts[1]
-
-    dep = get_deposit_by_utr(utr)
-
-    if dep is None or dep["status"] != "pending":
-        bot.reply_to(message, "No pending deposit found.")
-        return
-
-    approve_deposit(utr, message.from_user.id)
-
-    new_balance = adjust_balance(
-        int(dep["telegram_id"]),
-        float(dep["amount"])
-    )
-
-    bot.reply_to(
-        message,
-        f"✅ Approved.\nCredited ₹{dep['amount']}."
-    )
-
-    try:
-        bot.send_message(
-            int(dep["telegram_id"]),
-            f"✅ Deposit approved!\n\n+₹{dep['amount']}\nBalance: {new_balance}"
-        )
-    except:
-        pass
-
-
-@bot.message_handler(commands=["decline"])
-def cmd_decline_deposit(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission.")
-        return
-
-    parts = message.text.split(maxsplit=2)
-
-    if len(parts) < 2:
-        bot.reply_to(message, "Usage: /decline <utr> <reason>")
-        return
-
-    utr = parts[1]
-    reason = parts[2] if len(parts) > 2 else "No reason"
-
-    dep = get_deposit_by_utr(utr)
-
-    if dep is None or dep["status"] != "pending":
-        bot.reply_to(message, "No pending deposit found.")
-        return
-
-    decline_deposit(
-        utr,
-        message.from_user.id,
-        reason
-    )
-
-    bot.reply_to(message, "❌ Deposit declined.")
-
-    try:
-        bot.send_message(
-            int(dep["telegram_id"]),
-            f"❌ Deposit declined.\nReason: {reason}"
-        )
-    except:
-        pass
-
-
-@bot.message_handler(commands=["pendingdepo"])
-def cmd_pending_deposits(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    deps = pending_deposits()
-
-    if not deps:
-        bot.reply_to(message, "No pending deposits.")
-        return
-
-    text = "⏳ Pending Deposits\n\n"
-
-    for d in deps:
-        text += (
-            f"👤 {d['telegram_id']}\n"
-            f"💰 ₹{d['amount']}\n"
-            f"🏦 {d.get('utr') or '-'}\n\n"
-        )
-
-    bot.reply_to(message, text)
-
-
-@bot.message_handler(commands=["deposithistory"])
-def cmd_deposit_history(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    deps = deposit_history()
-
-    if not deps:
-        bot.reply_to(message, "No deposits yet.")
-        return
-
-    text = "📜 Deposit History\n\n"
-
-    for d in deps:
-        text += (
-            f"{d['status'].upper()} | ₹{d['amount']} | {d.get('utr') or '-'}\n"
-        )
-
-    bot.reply_to(message, text)
-
-
-@bot.message_handler(commands=["stopdeposit"])
-def cmd_stopdeposit(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    set_game_enabled("deposit", False)
-
-    bot.reply_to(message, "⏸ Deposits paused.")
-
-
-@bot.message_handler(commands=["startdeposit"])
-def cmd_startdeposit(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    set_game_enabled("deposit", True)
-
-    bot.reply_to(message, "▶ Deposits resumed.")
