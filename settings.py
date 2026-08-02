@@ -47,3 +47,35 @@ def get_house_edge() -> float:
 
 def set_house_edge(value: float):
     _set("house_edge", value)
+
+
+def get_deposit_upi() -> str:
+    return _get("deposit_upi", "not-real@fakebank")
+
+
+def set_deposit_upi(upi: str):
+    _set("deposit_upi", upi)
+
+
+def get_referral_deposit_pct() -> float:
+    return float(_get("referral_deposit_pct", 10))
+
+
+def set_referral_deposit_pct(value: float):
+    _set("referral_deposit_pct", value)
+
+
+def get_referral_deposit_count() -> int:
+    return int(float(_get("referral_deposit_count", 3)))
+
+
+def set_referral_deposit_count(value: int):
+    _set("referral_deposit_count", value)
+
+
+def get_referral_loss_pct() -> float:
+    return float(_get("referral_loss_pct", 1))
+
+
+def set_referral_loss_pct(value: float):
+    _set("referral_loss_pct", value)
