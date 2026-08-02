@@ -1,13 +1,12 @@
 import random
 import time
 
-from wallet import get_balance, adjust_balance, record_bet
+from wallet import get_balance, adjust_balance, record_bet, get_house_balance
 from game_math import payout_for
 from helpers import announce_win, format_display_name
-from wallet import get_house_balance
 from settings import get_min_bet, get_max_bet
 
-WIN_CHANCE = 0.40  # Set win probability to 40%
+WIN_CHANCE = 0.40  # 40% win chance
 
 HEADS_STICKER = "CAACAgQAAxkBAAFQ0lBqb0WwRqG7K3hRKZXSTKB9rnreEAACtCAAAgG_0VKYWqCdNDm4Nz0E"
 TAILS_STICKER = "CAACAgQAAxkBAAFQ0lRqb0XcyDCzfRrYxgvVk89rMD8U7gACWTwAAq7X0FLUZLVck-M2CT0E"
@@ -15,10 +14,12 @@ TAILS_STICKER = "CAACAgQAAxkBAAFQ0lRqb0XcyDCzfRrYxgvVk89rMD8U7gACWTwAAq7X0FLUZLV
 
 def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str):
     balance = get_balance(telegram_id)
+    house_balance = get_house_balance()
+    
     min_bet = get_min_bet()
-    max_bet = get_max_bet()
+    max_bet = get_max_bet(house_balance)  # Passed house_balance here
 
-    # Enforce bet limit constraints and balance check
+    # Enforce min/max bet caps
     if bet_amount < min_bet or bet_amount > max_bet:
         bot.reply_to(
             message,
@@ -33,7 +34,7 @@ def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str
         )
         return
 
-    # Determine outcome based on 40% win probability for user's choice
+    # Determine outcome (40% win rate for user's choice)
     other_choice = "tails" if choice == "heads" else "heads"
     outcome = random.choices(
         population=[choice, other_choice],
