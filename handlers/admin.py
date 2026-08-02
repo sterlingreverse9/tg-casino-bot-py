@@ -1,9 +1,9 @@
 from bot_instance import bot
-from db import insert, update
+from db import insert, update, select
 from wallet import get_or_create_user, adjust_balance, resolve_amount
 from settings import get_min_bet, set_min_bet, get_max_bet, set_max_bet, get_house_edge, set_house_edge
 from middleware.admin import is_admin
-from helpers import get_target_user
+from helpers import get_target_user, get_all_admin_ids
 
 
 @bot.message_handler(commands=["add"])
@@ -31,7 +31,7 @@ def cmd_add(message):
     get_or_create_user(target_id, None)
     new_balance = adjust_balance(target_id, amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added ₹{amount} \nUser: {target_id}\nNew balance: ₹{new_balance}")
+    bot.reply_to(message, f"✅ Added {amount} rupees\nUser: {target_id}\nNew balance: ₹{new_balance}")
 
 
 @bot.message_handler(commands=["deduct"])
@@ -62,7 +62,7 @@ def cmd_deduct(message):
         return
     new_balance = adjust_balance(target_id, -amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted ₹{amount} \nUser: {target_id}\nBalance: ₹{new_balance}")
+    bot.reply_to(message, f"✅ Deducted {amount} rupees\nUser: {target_id}\nBalance: ₹{new_balance}")
 
 
 # ---------- Admin: promote/demote ----------
@@ -111,7 +111,7 @@ def cmd_updatehb(message):
     amount = float(parts[1])
     update("house", {"id": 1}, {"balance": amount})
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "updatehb", "amount": amount})
-    bot.reply_to(message, f"🏦 House balance set to {amount}.")
+    bot.reply_to(message, f"🏦 House balance set to ₹{amount}.")
 
 
 @bot.message_handler(commands=["minbet"])
@@ -129,7 +129,7 @@ def cmd_minbet(message):
         bot.reply_to(message, "Amount must be a number.")
         return
     set_min_bet(amt)
-    bot.reply_to(message, f"✅ Minimum bet set to {amt} coins.")
+    bot.reply_to(message, f"✅ Minimum bet set to ₹{amt} .")
 
 
 @bot.message_handler(commands=["maxbet"])
@@ -171,6 +171,58 @@ def cmd_sethousedge(message):
         return
     set_house_edge(val)
     bot.reply_to(message, f"✅ House edge set to {val} ({val * 100:.1f}%). Applies to all games immediately.")
+
+
+@bot.message_handler(commands=["resetld"])
+def cmd_resetld(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    update("users", {}, {"total_wagered": 0, "total_won": 0, "total_lost": 0})
+    bot.reply_to(message, "🔄 Leaderboard/wager stats reset for everyone.")
+
+
+@bot.message_handler(commands=["killbal" , "killeverybalance" ])
+def cmd_killbal(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    update("users", {}, {"balance": 0})
+    bot.reply_to(message, "💀 Every user's balance has been reset to 0.")
+
+
+@bot.message_handler(commands=["admincommands"])
+def cmd_admin_commands(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+    text = (
+        "🛠️ Admin Commands\n\n"
+        "Balance: /add /deduct /killbal /resetld /updatehb\n"
+        "Access: /promote /demote\n"
+        "Game economy: /minbet /maxbet /sethousedge\n"
+        "Games: /start <game> /stop <game>\n"
+        "Rain: /rain /cancelrain\n"
+        "Deposits: /changeupi /approve /decline /pendingdepo /deposithistory /stopdeposit /startdeposit\n"
+        "Withdrawals: /approvewithdraw /declinewithdraw /pendingwithdraw /withdrawhistory /startwithdraw /stopwithdraw\n"
+        "Referrals: /stopreferral /startreferral /updateinviterewards\n"
+        "Other: /announce /msg /botstats"
+    )
+    bot.reply_to(message, text)
+
+
+@bot.message_handler(commands=["admin", "admins"])
+def cmd_admins(message):
+    admin_ids = get_all_admin_ids()
+    if not admin_ids:
+        bot.reply_to(message, "No admins configured yet.")
+        return
+    lines = []
+    for admin_id in admin_ids:
+        u = select("users", filters={"telegram_id": admin_id}, single=True)
+        username = u.get("username") if u else None
+        lines.append(f"👑 @{username}" if username else f"👑 {admin_id}")
+    bot.reply_to(message, "👑 Admins:\n" + "\n".join(lines))
 
 
 # ---------- Admin: rain ----------
