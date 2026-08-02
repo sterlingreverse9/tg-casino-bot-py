@@ -1,6 +1,7 @@
 from wallet import get_balance, adjust_balance, record_bet, get_house_balance
 from game_math import payout_for
 from settings import get_min_bet, get_max_bet
+from helpers import announce_win
 
 EVEN_MONEY_CHOICES = {
     "high": {4, 5, 6},
@@ -19,7 +20,7 @@ LABELS = {
 }
 
 
-def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: str):
+def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: str, display_name: str = None):
     choice = choice.lower()
     if choice not in ALL_CHOICES:
         bot.send_message(chat_id, "Invalid choice. Use high, low, even, odd, or a number 1-6.")
@@ -70,10 +71,11 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
     if won:
         bot.send_message(
             chat_id,
-            f"🎲 Rolled {roll}!\nYou bet on {label}\n✅ You won ₹{payout} !\nBalance: {new_balance}",
+            f"🎲 Rolled {roll}!\nYou bet on {label}\n✅ You won ₹{payout} !\nBalance: ₹{new_balance}",
         )
+        announce_win(display_name or str(telegram_id), payout, "Dice Roll")
     else:
         bot.send_message(
             chat_id,
-            f"🎲 Rolled {roll}!\nYou bet on {label}\n❌ You lost ₹{bet_amount} .\nBalance: {new_balance}",
+            f"🎲 Rolled {roll}!\nYou bet on {label}\n❌ You lost ₹{bet_amount} .\nBalance: ₹{new_balance}",
         )
