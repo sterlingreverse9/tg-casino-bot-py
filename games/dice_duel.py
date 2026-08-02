@@ -1,5 +1,6 @@
 import time
 from wallet import adjust_balance, record_bet
+from settings import get_house_edge  # Dynamically fetches configured house edge %
 from helpers import announce_win
 
 MIN_BET = 10
@@ -7,7 +8,7 @@ MIN_BET = 10
 
 def decide_round_winner(a_sum: int, b_sum: int, mode: str = "classic"):
     if a_sum == b_sum:
-        return None  # tie -> reroll
+        return None  # tie -> reroll round
     if mode == "crazy":
         return "a" if a_sum < b_sum else "b"
     return "a" if a_sum > b_sum else "b"
@@ -86,6 +87,23 @@ def handle_player_dice_turn(bot, message, state):
     else:
         state["bot_wins"] += 1
 
+    # If scheduled rounds are complete but overall game is tied (e.g., 1-1 in 2 rounds)
+    if state["current_round"] >= state["total_rounds"] and state["player_wins"] == state["bot_wins"]:
+        user_ref = f"@{state['username']}" if state['username'] else "User"
+        state["current_round"] += 1
+        bot.send_message(
+            state["chat_id"],
+            f"⚔️ <b>Tie Game ({state['player_wins']}-{state['bot_wins']})! Tiebreaker Round {state['current_round']}</b>\n"
+            f"👤 {user_ref} — Send 🎲 now!",
+            parse_mode="HTML"
+        )
+        bot.register_next_step_handler_by_chat_id(
+            state["chat_id"],
+            lambda msg: handle_player_dice_turn(bot, msg, state)
+        )
+        return
+
+    # Continue to next standard round
     if state["current_round"] < state["total_rounds"]:
         state["current_round"] += 1
         user_ref = f"@{state['username']}" if state['username'] else "User"
@@ -107,9 +125,13 @@ def handle_player_dice_turn(bot, message, state):
 def finish_dice_game(bot, state):
     won = state["player_wins"] > state["bot_wins"]
     bet_amount = state["bet_amount"]
-    payout = (bet_amount * 2) if won else 0
     telegram_id = state["telegram_id"]
     username = state["username"]
+
+    # Calculate multiplier using configured house edge % (e.g., 5% edge = 1.90x multiplier)
+    house_edge_pct = get_house_edge()  # Expected format: float (e.g. 5.0 for 5%)
+    multiplier = 2.0 * (1.0 - (house_edge_pct / 100.0))
+    payout = round(bet_amount * multiplier, 2) if won else 0
 
     if won:
         adjust_balance(telegram_id, payout)
@@ -121,7 +143,7 @@ def finish_dice_game(bot, state):
         bet_amount=bet_amount,
         payout=payout,
         result="win" if won else "loss",
-        meta={"rounds": state["total_rounds"], "player_score": state["player_wins"], "bot_score": state["bot_wins"]},
+        meta={"rounds": state["current_round"], "player_score": state["player_wins"], "bot_score": state["bot_wins"]},
     )
 
     formatted_bet = int(bet_amount) if bet_amount.is_integer() else bet_amount
@@ -130,7 +152,7 @@ def finish_dice_game(bot, state):
         formatted_payout = int(payout) if payout.is_integer() else payout
         bot.send_message(
             state["chat_id"],
-            f"🎉 <b>You won! Score: {state['player_wins']}-{state['bot_wins']}</b>\n💰 <b>Payout: ₹{formatted_payout}</b>",
+            f"🎉 <b>You won! Score: {state['player_wins']}-{state['bot_wins']}</b>\n💰 <b>Payout: ₹{formatted_payout} ({multiplier:.2f}x)</b>",
             parse_mode="HTML"
         )
     else:
