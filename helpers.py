@@ -38,11 +38,29 @@ def get_all_admin_ids():
     return [int(u["telegram_id"]) for u in users if u.get("is_admin")]
 
 
+WINS_CHANNEL = "@thecassinowins"
+
+
+def announce_win(name: str, amount: float, game_label: str):
+    try:
+        bot.send_message(WINS_CHANNEL, f"⚡️ {name} won {amount} in the {game_label}")
+    except Exception as e:
+        print(f"Failed to post win announcement: {e}")
+
+
+def is_member_of(channel: str, telegram_id: int) -> bool:
+    try:
+        member = bot.get_chat_member(channel, telegram_id)
+        return member.status in ("member", "administrator", "creator")
+    except Exception:
+        return False
+
+
 def notify_admins_of_deposit(telegram_id, username, utr):
     dep = get_deposit_by_utr(utr)
     admin_ids = get_all_admin_ids()
     text = (
-        f"🆕 Fake deposit request\n"
+        f"🆕 Deposit request\n"
         f"User: {('@' + username) if username else telegram_id}\n"
         f"Amount requested: {dep['amount']} coins\n"
         f"UTR: {utr}\n\n"
