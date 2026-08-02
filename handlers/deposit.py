@@ -15,7 +15,9 @@ from deposit import (
 from referral import apply_deposit_reward
 
 WARNING = (
-    f"."
+    f"⚠️ {CASINO_NAME} is a FUN casino. Everything here is FAKE.\n"
+    "Do NOT send real money — nobody is watching that UPI ID, nothing will happen if you pay it, "
+    "and it will NOT be refunded."
 )
 
 FAKE_QR_BLOCK_TEMPLATE = (
@@ -24,7 +26,7 @@ FAKE_QR_BLOCK_TEMPLATE = (
     "┃  NOT A REAL   ┃\n"
     "┃ PAYMENT CODE  ┃\n"
     "┗━━━━━━━━━━━━━━━━┛\n\n"
-    "UPI ID: {upi}"
+    "UPI ID: {upi} (NOT REAL — do not send money to it)\n\n"
 )
 
 
@@ -38,7 +40,7 @@ def cmd_changeupi(message):
         bot.reply_to(message, "Usage: /changeupi <fake_upi_id>")
         return
     set_deposit_upi(parts[1])
-    bot.reply_to(message, f"✅ Deposit UPI changed to {parts[1]}")
+    bot.reply_to(message, f"✅ Deposit UPI (fake) changed to {parts[1]}")
 
 
 @bot.message_handler(commands=["deposit", "depo"])
@@ -57,7 +59,7 @@ def cmd_deposit(message):
     deposit_states[message.from_user.id] = {"step": "amount"}
     bot.reply_to(
         message,
-        f"{WARNING}\n\nHow many inr(₹) would you like to request? (min 50, enter a number)",
+        f"{WARNING}\n\nHow many fake coins would you like to request? (min 50, enter a number)",
     )
 
 
@@ -72,10 +74,10 @@ def handle_deposit_text(message):
         try:
             amount = float(message.text.strip())
         except ValueError:
-            bot.reply_to(message, "Enter a valid number of rupees.")
+            bot.reply_to(message, "Enter a valid number of coins.")
             return
         if amount < 50:
-            bot.reply_to(message, "Minimum deposit is 50 rupees.")
+            bot.reply_to(message, "Minimum deposit is 50 coins.")
             return
 
         dep = create_deposit(message.from_user.id, message.from_user.username, amount)
@@ -84,13 +86,13 @@ def handle_deposit_text(message):
         state["step"] = "paid"
 
         caption = (
-            f"💰 Requested amount: ₹{amount} \n\n"
-            f"UPI ID: {get_deposit_upi()}" 
-            f"\n\n"
-            "Tap the button below once you've 'paid' ."
+            f"💰 Requested amount: {amount} fake coins\n\n"
+            f"UPI ID: {get_deposit_upi()} — THIS IS NOT REAL, do not pay it.\n\n"
+            f"{WARNING}\n\n"
+            "Tap the button below once you've 'paid' (i.e. done nothing real)."
         )
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("✅ I Have 'Paid'", callback_data="deposit_paid"))
+        markup.add(InlineKeyboardButton("✅ I Have 'Paid' (still fake!)", callback_data="deposit_paid"))
 
         try:
             with open("/storage/emulated/0/Download/qr.jpg", "rb") as photo:
@@ -102,7 +104,7 @@ def handle_deposit_text(message):
     if state["step"] == "utr":
         utr = message.text.strip()
         if len(utr) != 12 or not utr.isdigit():
-            bot.reply_to(message, "UTR should be exactly 12 digits.type 12 digits:")
+            bot.reply_to(message, "UTR should be exactly 12 digits. It's fake anyway — just type any 12 digits:")
             return
         try:
             save_utr(state["deposit_id"], utr)
@@ -110,7 +112,7 @@ def handle_deposit_text(message):
             bot.reply_to(message, "That UTR was already used by someone else. Try a different 12 digits:")
             return
         state["step"] = "screenshot"
-        bot.reply_to(message, "📸 Now send a screenshot to prove your payment.")
+        bot.reply_to(message, "📸 Now send a screenshot to 'prove' your fake payment. (Still not real, promise.)")
         return
 
 
@@ -122,7 +124,7 @@ def handle_deposit_paid(call):
         bot.send_message(call.message.chat.id, "Session expired — use /deposit again.")
         return
     state["step"] = "utr"
-    bot.send_message(call.message.chat.id, Now enter your 12-digit UTR code :")
+    bot.send_message(call.message.chat.id, f"{WARNING}\n\nNow enter your 12-digit UTR code (just for the vibes 😄):")
 
 
 @bot.message_handler(
@@ -137,7 +139,8 @@ def handle_deposit_screenshot(message):
     deposit_states.pop(message.from_user.id, None)
     bot.reply_to(
         message,
-        "Admin has been notified 🔔! Your deposit will be confirmed soon ",
+        "🤨 Why are you trying to deposit? This is a FUN casino, not a real one — nobody's taking your money!\n"
+        "But since you asked nicely, your request has been sent to the admins for some fake coins.",
     )
     if dep:
         notify_admins_of_deposit(message.from_user.id, message.from_user.username, dep["utr"])
@@ -165,9 +168,9 @@ def cmd_approve_deposit(message):
     approve_deposit(utr, message.from_user.id)
     new_balance = adjust_balance(int(dep["telegram_id"]), float(dep["amount"]))
     apply_deposit_reward(int(dep["telegram_id"]), float(dep["amount"]))
-    bot.reply_to(message, f"✅ Approved. Credited {dep['amount']} rupees to {dep['telegram_id']}.")
+    bot.reply_to(message, f"✅ Approved. Credited {dep['amount']} coins to {dep['telegram_id']}.")
     try:
-        bot.send_message(int(dep["telegram_id"]), f"✅ Your deposit request was approved!\n+{dep['amount']} rupess\nBalance: ₹{new_balance}")
+        bot.send_message(int(dep["telegram_id"]), f"✅ Your deposit request was approved!\n+{dep['amount']} coins\nBalance: {new_balance}")
     except Exception:
         pass
 
