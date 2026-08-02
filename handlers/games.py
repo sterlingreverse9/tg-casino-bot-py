@@ -6,11 +6,11 @@ from games.coinflip import play_coinflip
 from games.dice_roll import play_dice_roll
 from games.limbo import play_limbo, parse_multiplier
 from games.predict import play_predict_number
-from helpers import ensure_user
+from helpers import ensure_user, format_display_name
 
 
 def name_of(user):
-    return user.username or user.first_name
+    return format_display_name(user.first_name, user.username)
 
 
 @bot.message_handler(commands=["cf"])
