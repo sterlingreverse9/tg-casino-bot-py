@@ -6,11 +6,40 @@ from game_status import set_game_enabled
 from middleware.admin import is_admin
 from helpers import ensure_user, has_promo_tag, get_target_user
 from state import PROMO_TAG
+from referral import get_user_by_referral_code, set_referred_by, record_referral_join
 
 
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
     parts = message.text.split()
+
+    if len(parts) >= 2 and parts[1].startswith("ref-"):
+        code = parts[1][4:]
+        existing_user = select("users", filters={"telegram_id": message.from_user.id}, single=True)
+        get_or_create_user(message.from_user.id, message.from_user.username)
+
+        if existing_user is None:
+            referrer = get_user_by_referral_code(code)
+            if referrer and int(referrer["telegram_id"]) != message.from_user.id:
+                set_referred_by(message.from_user.id, int(referrer["telegram_id"]))
+                record_referral_join(int(referrer["telegram_id"]), message.from_user.id, message.from_user.username)
+                referrer_name = referrer.get("username") or str(referrer["telegram_id"])
+                bot.reply_to(
+                    message,
+                    f"👋 You've joined under {referrer_name}'s referral, you can't change it in future.\n"
+                    f"Welcome to {CASINO_NAME}! Type /me to see your profile.",
+                )
+                try:
+                    joiner_name = message.from_user.first_name or str(message.from_user.id)
+                    joiner_tag = f"(@{message.from_user.username})" if message.from_user.username else ""
+                    bot.send_message(int(referrer["telegram_id"]), f"{joiner_name}{joiner_tag} has joined through your referral 🎲")
+                except Exception:
+                    pass
+                return
+
+        bot.reply_to(message, f"👋 Welcome to {CASINO_NAME}! Type /me to see your profile.")
+        return
+
     if len(parts) >= 2 and is_admin(message.from_user.id):
         game = parts[1].lower()
         set_game_enabled(game, True)
@@ -52,7 +81,7 @@ def cmd_me(message):
 def cmd_wallet(message):
     ensure_user(message)
     balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: ₹{balance} ")
+    bot.reply_to(message, f"💰 Your balance: ₹{balance}")
 
 
 @bot.message_handler(commands=["rakeback"])
@@ -69,10 +98,10 @@ def cmd_rakeback(message):
         note = f"(1% rate — thanks for having {PROMO_TAG} in your name!)"
     else:
         note = f"(0.5% rate — add {PROMO_TAG} to your name for 1%!)"
-    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} rupess {note}\nBalance: ₹{new_balance}")
+    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} rupess {note}\nBalance: {new_balance}")
 
 
-@bot.message_handler(commands=["housebal", "house"])
+@bot.message_handler(commands=["housebal", "house" , "hb" , "housebalance" ])
 def cmd_housebal(message):
     bal = get_house_balance()
     bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: ₹{bal} ")
@@ -98,7 +127,7 @@ def cmd_history(message):
 @bot.message_handler(commands=["leaderboard", "ld"])
 def cmd_leaderboard(message):
     top = select("users", order="total_won", desc=True, limit=10)
-    lines = [f"{i+1}. {u['username'] or 'Anonymous'} — {u['total_won']} coins won" for i, u in enumerate(top)]
+    lines = [f"{i+1}. {u['username'] or 'Anonymous'} — {u['total_won']} rupess won" for i, u in enumerate(top)]
     bot.reply_to(message, f"🏆 {CASINO_NAME} Leaderboard:\n" + "\n".join(lines))
 
 
@@ -144,10 +173,10 @@ def cmd_tip(message):
 
     balance = get_balance(sender_id)
     if amount > balance:
-        bot.reply_to(message, f"You only have {balance} coins.")
+        bot.reply_to(message, f"You only have ₹{balance} .")
         return
 
     adjust_balance(sender_id, -amount)
     new_balance = adjust_balance(target_id, amount)
-    bot.reply_to(message, f"💸 Tip sent!\nTo: {target_name}\nAmount: {amount}\nTheir balance: {new_balance}")
+    bot.reply_to(message, f"💸 Tip sent!\nTo: {target_name}\nAmount: ₹{amount}\nTheir balance: ₹{new_balance}")
 
