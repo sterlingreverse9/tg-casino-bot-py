@@ -7,7 +7,7 @@ from helpers import announce_win
 
 def decide_round_winner(a_sum: int, b_sum: int, mode: str = "classic"):
     if a_sum == b_sum:
-        return None  # tie -> reroll
+        return None  # tie -> reroll round
     if mode == "crazy":
         return "a" if a_sum < b_sum else "b"
     return "a" if a_sum > b_sum else "b"
@@ -93,6 +93,7 @@ def handle_player_dice_turn(bot, message, state):
 
     state["round_history"].append(round_res)
 
+    # Tiebreaker handling if overall score is equal after playing all rounds
     if state["current_round"] >= state["total_rounds"] and state["player_wins"] == state["bot_wins"]:
         state["current_round"] += 1
         bot.send_message(
@@ -130,10 +131,12 @@ def finish_dice_game(bot, state):
     username = state["username"]
     user_ref = state["user_ref"]
 
-    # Normalize house edge (e.g. 0.20 or 20.0 both calculate to 0.20 decimal)
+    # Dynamic house edge calculation
     raw_edge = float(get_house_edge())
     edge_decimal = raw_edge if raw_edge < 1.0 else (raw_edge / 100.0)
-    multiplier = round(2.0 * (1.0 - edge_decimal), 2)
+    
+    # Correct formula: 2.0x minus the house edge
+    multiplier = round(2.0 - edge_decimal, 2)
 
     payout = round(bet_amount * multiplier, 2) if won else 0
 
