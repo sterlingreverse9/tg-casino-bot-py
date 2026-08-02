@@ -18,7 +18,7 @@ def survive_chance(difficulty: str) -> float:
 def floor_multiplier(difficulty: str, floors_cleared: int) -> float:
     p = survive_chance(difficulty)
     edge = get_house_edge()
-    return round((1 / p) ** floors_cleared * (1 - edge), 4)
+    return round((1 / p) ** floors_cleared * (1 - edge), 2)
 
 
 def generate_floor(difficulty: str):
