@@ -1,3 +1,4 @@
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot_instance import bot
 from config import CASINO_NAME
 from db import select
@@ -9,9 +10,26 @@ from state import PROMO_TAG
 from referral import get_user_by_referral_code, set_referred_by, record_referral_join
 
 
+def build_welcome_text(name: str) -> str:
+    return (
+        f"👋 Hello {name}, welcome to {CASINO_NAME}! 🎰\n\n"
+        "Please join the channels and group below for the smoothest experience — "
+        "you'll catch win announcements, updates, and the main game chat."
+    )
+
+
+def build_welcome_keyboard():
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🎮 Play Group", url="https://t.me/thecassinogroup"))
+    markup.add(InlineKeyboardButton("📢 Updates Channel", url="https://t.me/thecassinoupdates"))
+    markup.add(InlineKeyboardButton("🏆 Wins Channel", url="https://t.me/thecassinowins"))
+    return markup
+
+
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
     parts = message.text.split()
+    name = message.from_user.first_name or (message.from_user.username or "there")
 
     if len(parts) >= 2 and parts[1].startswith("ref-"):
         code = parts[1][4:]
@@ -26,8 +44,9 @@ def cmd_start(message):
                 referrer_name = referrer.get("username") or str(referrer["telegram_id"])
                 bot.reply_to(
                     message,
-                    f"👋 You've joined under {referrer_name}'s referral, you can't change it in future.\n"
-                    f"Welcome to {CASINO_NAME}! Type /me to see your profile.",
+                    f"You've joined under {referrer_name}'s referral, you can't change it in future.\n\n"
+                    + build_welcome_text(name),
+                    reply_markup=build_welcome_keyboard(),
                 )
                 try:
                     joiner_name = message.from_user.first_name or str(message.from_user.id)
@@ -37,7 +56,7 @@ def cmd_start(message):
                     pass
                 return
 
-        bot.reply_to(message, f"👋 Welcome to {CASINO_NAME}! Type /me to see your profile.")
+        bot.reply_to(message, build_welcome_text(name), reply_markup=build_welcome_keyboard())
         return
 
     if len(parts) >= 2 and is_admin(message.from_user.id):
@@ -46,7 +65,7 @@ def cmd_start(message):
         bot.reply_to(message, f"▶️ '{game}' has been started/enabled.")
         return
     ensure_user(message)
-    bot.reply_to(message, f"👋 Welcome to {CASINO_NAME}! Type /me to see your profile.")
+    bot.reply_to(message, build_welcome_text(name), reply_markup=build_welcome_keyboard())
 
 
 @bot.message_handler(commands=["stop"])
@@ -77,34 +96,17 @@ def cmd_me(message):
     )
 
 
-@bot.message_handler(commands=["wallet"])
+@bot.message_handler(commands=["wallet" , "balance" , "bal" ])
 def cmd_wallet(message):
     ensure_user(message)
     balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: ₹{balance}")
+    bot.reply_to(message, f"💰 Your balance: ₹{balance} ")
 
 
-@bot.message_handler(commands=["rakeback"])
-def cmd_rakeback(message):
-    ensure_user(message)
-    user = select("users", filters={"telegram_id": message.from_user.id}, single=True)
-    rate = 0.01 if has_promo_tag(message.from_user) else 0.005
-    rakeback = round(float(user["total_lost"]) * rate, 2)
-    if rakeback <= 0:
-        bot.reply_to(message, "No rakeback available yet — play a bit more first!")
-        return
-    new_balance = adjust_balance(message.from_user.id, rakeback)
-    if rate == 0.01:
-        note = f"(1% rate — thanks for having {PROMO_TAG} in your name!)"
-    else:
-        note = f"(0.5% rate — add {PROMO_TAG} to your name for 1%!)"
-    bot.reply_to(message, f"💸 Rakeback claimed: +{rakeback} rupess {note}\nBalance: {new_balance}")
-
-
-@bot.message_handler(commands=["housebal", "house" , "hb" , "housebalance" ])
+@bot.message_handler(commands=["housebal", "house" , "hb" ])
 def cmd_housebal(message):
     bal = get_house_balance()
-    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: ₹{bal} ")
+    bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: ₹{bal}")
 
 
 @bot.message_handler(commands=["history"])
@@ -127,7 +129,7 @@ def cmd_history(message):
 @bot.message_handler(commands=["leaderboard", "ld"])
 def cmd_leaderboard(message):
     top = select("users", order="total_won", desc=True, limit=10)
-    lines = [f"{i+1}. {u['username'] or 'Anonymous'} — {u['total_won']} rupess won" for i, u in enumerate(top)]
+    lines = [f"{i+1}. {u['username'] or 'Anonymous'} — {u['total_won']} rupees won" for i, u in enumerate(top)]
     bot.reply_to(message, f"🏆 {CASINO_NAME} Leaderboard:\n" + "\n".join(lines))
 
 
