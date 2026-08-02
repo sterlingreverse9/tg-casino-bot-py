@@ -14,6 +14,7 @@ def cmd_announce(message):
         bot.reply_to(message, "Usage: /announce <message>")
         return
     text = parts[1]
+    bot.reply_to(message, "🔄 Sending announcement...")
 
     dm_sent = dm_failed = 0
     group_sent = group_failed = 0
@@ -29,7 +30,13 @@ def cmd_announce(message):
         except Exception:
             dm_failed += 1
 
-    for c in get_all_chats():
+    try:
+        chats = get_all_chats()
+    except Exception as e:
+        print(f"Failed to fetch chats list: {e}")
+        chats = []
+
+    for c in chats:
         cid = int(c["chat_id"])
         is_channel = c.get("chat_type") == "channel"
         try:
@@ -79,13 +86,20 @@ def cmd_msg(message):
     target_id = int(target["telegram_id"])
 
     dm_ok = True
+    bot.reply_to(message, f"🔄 Sending to @{username}...")
     try:
         bot.send_message(target_id, f"📩 Message from admin:\n{text}")
     except Exception:
         dm_ok = False
 
     group_count = 0
-    for c in get_all_chats():
+    try:
+        chats = get_all_chats()
+    except Exception as e:
+        print(f"Failed to fetch chats list: {e}")
+        chats = []
+
+    for c in chats:
         if c.get("chat_type") == "channel":
             continue
         cid = int(c["chat_id"])
