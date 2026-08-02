@@ -42,10 +42,15 @@ WINS_CHANNEL = "@thecassinowins"
 
 
 def announce_win(name: str, amount: float, game_label: str):
+    print(f"[DEBUG] announce_win called: {name} {amount} {game_label}")
     try:
-        bot.send_message(WINS_CHANNEL, f"⚡️ {name} won {amount} in the {game_label}")
+        bot.send_message(
+            WINS_CHANNEL,
+            f"⚡️ {name} won {amount} in the {game_label}"
+        )
+        print("[DEBUG] Win announcement sent")
     except Exception as e:
-       print(f"Failed to post win announcement: {e}")
+        print("[DEBUG] Error:", repr(e))
 
 
 def is_member_of(channel: str, telegram_id: int) -> bool:
