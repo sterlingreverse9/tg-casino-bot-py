@@ -2,6 +2,8 @@ import time
 from wallet import adjust_balance, record_bet
 from helpers import announce_win
 
+MIN_BET = 10
+
 
 def decide_round_winner(a_sum: int, b_sum: int, mode: str = "classic"):
     if a_sum == b_sum:
@@ -18,7 +20,6 @@ def start_dice_game_step(bot, chat_id, telegram_id: int, bet_amount: float, roun
     user_ref = f"@{username}" if username else f'<a href="tg://user?id={telegram_id}">User</a>'
     formatted_bet = int(bet_amount) if bet_amount.is_integer() else bet_amount
 
-    # State tracking dictionary for the game session
     game_state = {
         "chat_id": chat_id,
         "telegram_id": telegram_id,
@@ -30,7 +31,6 @@ def start_dice_game_step(bot, chat_id, telegram_id: int, bet_amount: float, roun
         "bot_wins": 0,
     }
 
-    # Prompt user with round info and requirement
     prompt_text = (
         f"<b>🎲 Dice vs Bot ₹{formatted_bet}</b>\n"
         f"<b>Round 1 of {rounds}</b>\n\n"
@@ -38,7 +38,6 @@ def start_dice_game_step(bot, chat_id, telegram_id: int, bet_amount: float, roun
     )
     bot.send_message(chat_id, prompt_text, parse_mode="HTML")
 
-    # Register handler to wait for user's dice throw
     bot.register_next_step_handler_by_chat_id(
         chat_id,
         lambda msg: handle_player_dice_turn(bot, msg, game_state)
@@ -46,7 +45,6 @@ def start_dice_game_step(bot, chat_id, telegram_id: int, bet_amount: float, roun
 
 
 def handle_player_dice_turn(bot, message, state):
-    # Verify the message comes from the correct player
     if message.from_user.id != state["telegram_id"]:
         bot.register_next_step_handler_by_chat_id(
             state["chat_id"],
@@ -54,7 +52,6 @@ def handle_player_dice_turn(bot, message, state):
         )
         return
 
-    # Check if user sent a genuine Telegram Dice emoji
     if not message.dice or message.dice.emoji != "🎲":
         bot.reply_to(message, "Please send a valid 🎲 emoji to take your turn!")
         bot.register_next_step_handler_by_chat_id(
@@ -63,20 +60,16 @@ def handle_player_dice_turn(bot, message, state):
         )
         return
 
-    # 1. Player's roll value
     player_roll = message.dice.value
 
-    # 2. Bot rolls its dice right after
     bot_dice_msg = bot.send_dice(state["chat_id"], emoji="🎲")
     bot_roll = bot_dice_msg.dice.value
 
-    # Animation delay
     time.sleep(3)
 
     winner = decide_round_winner(player_roll, bot_roll, mode="classic")
 
     if winner is None:
-        # Tie -> Prompt for reroll
         bot.send_message(
             state["chat_id"],
             f"🤝 <b>Tie ({player_roll} vs {bot_roll})! Roll again 🎲</b>",
@@ -93,7 +86,6 @@ def handle_player_dice_turn(bot, message, state):
     else:
         state["bot_wins"] += 1
 
-    # Check if more rounds remain
     if state["current_round"] < state["total_rounds"]:
         state["current_round"] += 1
         user_ref = f"@{state['username']}" if state['username'] else "User"
@@ -109,7 +101,6 @@ def handle_player_dice_turn(bot, message, state):
             lambda msg: handle_player_dice_turn(bot, msg, state)
         )
     else:
-        # Final evaluation
         finish_dice_game(bot, state)
 
 
