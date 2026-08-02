@@ -38,7 +38,7 @@ def get_all_admin_ids():
     return [int(u["telegram_id"]) for u in users if u.get("is_admin")]
 
 
-WINS_CHANNEL = "thecassinowins"
+WINS_CHANNEL = "@thecassinowins"
 
 
 def announce_win(name: str, amount: float, game_label: str):
