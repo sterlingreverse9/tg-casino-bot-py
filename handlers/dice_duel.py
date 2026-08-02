@@ -3,19 +3,23 @@ from games.dice_duel import run_dice_vs_bot, MIN_BET
 from wallet import get_balance, get_house_balance
 from settings import get_min_bet, get_max_bet
 
+
 def setup_dice_handlers(bot):
     @bot.message_handler(commands=["dice"])
     def handle_dice_command(message):
         try:
-            # Handle commands like /dice@BotName properly
-            text = message.text.replace(f"@{bot.get_me().username}", "") if bot.get_me().username else message.text
-            args = text.split()
-            
+            # Strip bot username if invoked via /dice@BotName
+            raw_text = message.text
+            bot_username = bot.get_me().username
+            if bot_username and f"@{bot_username}" in raw_text:
+                raw_text = raw_text.replace(f"@{bot_username}", "")
+
+            args = raw_text.split()
             chat_id = message.chat.id
             telegram_id = message.from_user.id
             username = message.from_user.username
             
-            # Escape HTML characters in user display names to prevent parser crashes
+            # Format user reference safely with HTML escaping
             first_name = html.escape(message.from_user.first_name or "User")
             user_ref = f"@{username}" if username else first_name
 
@@ -30,19 +34,19 @@ def setup_dice_handlers(bot):
                     "<code>/dice @user 50</code> — challenge a player\n"
                     "<code>/dice @user 50 3</code> — with amount only; rounds & mode selected via buttons"
                 )
-                bot.reply_to(message, help_text, parse_mode="HTML")
+                bot.send_message(chat_id, help_text, parse_mode="HTML")
                 return
 
             # Case 2: PvP Challenge
             if args[1].startswith("@"):
-                bot.reply_to(message, "PvP challenges coming soon!")
+                bot.send_message(chat_id, "PvP challenges coming soon!")
                 return
 
             # Parse Bet Amount
             try:
                 bet_amount = float(args[1])
             except ValueError:
-                bot.reply_to(message, "Invalid bet amount.")
+                bot.send_message(chat_id, "Invalid bet amount.")
                 return
 
             # Parse Rounds (Default: 1)
@@ -51,10 +55,10 @@ def setup_dice_handlers(bot):
                 try:
                     rounds = int(args[2])
                     if rounds < 1 or rounds > 5:
-                        bot.reply_to(message, "Rounds must be between 1 and 5.")
+                        bot.send_message(chat_id, "Rounds must be between 1 and 5.")
                         return
                 except ValueError:
-                    bot.reply_to(message, "Invalid number of rounds.")
+                    bot.send_message(chat_id, "Invalid number of rounds.")
                     return
 
             # Balance & Limit Checks
@@ -64,19 +68,19 @@ def setup_dice_handlers(bot):
 
             if balance < bet_amount:
                 formatted_bal = int(balance) if balance.is_integer() else balance
-                bot.reply_to(
-                    message,
+                bot.send_message(
+                    chat_id,
                     f"❌ {user_ref} Not quite enough in the tank 💸 — you've got ₹{formatted_bal}",
                     parse_mode="HTML"
                 )
                 return
 
             if bet_amount < min_bet:
-                bot.reply_to(message, f"Minimum bet is ₹{min_bet}.")
+                bot.send_message(chat_id, f"Minimum bet is ₹{min_bet}.")
                 return
 
             if bet_amount > max_bet:
-                bot.reply_to(message, f"Maximum bet is ₹{round(max_bet, 2)}.")
+                bot.send_message(chat_id, f"Maximum bet is ₹{round(max_bet, 2)}.")
                 return
 
             # Run Game Logic
@@ -90,4 +94,4 @@ def setup_dice_handlers(bot):
             )
 
         except Exception as e:
-            print(f"Error in /dice command: {e}")
+            print(f"Error in /dice command handler: {e}")
