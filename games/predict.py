@@ -1,13 +1,20 @@
 import random
-from wallet import get_balance, adjust_balance, record_bet
-from settings import get_min_bet, get_max_bet
-from wallet import get_house_balance
+from wallet import adjust_balance, get_balance, get_house_balance, record_bet
+from settings import get_max_bet, get_min_bet
 from helpers import announce_win
 
 PAYOUT_MULTIPLIER = 70
 
 
-def play_predict_number(bot, chat_id, telegram_id: int, bet_amount: float, guess: int, display_name: str = None):
+def play_predict_number(
+    bot,
+    chat_id,
+    telegram_id: int,
+    bet_amount: float,
+    guess: int,
+    display_name: str = None,
+    username: str = None,
+):
     if guess < 1 or guess > 100:
         bot.send_message(chat_id, "Pick a number between 1 and 100.")
         return
@@ -17,13 +24,15 @@ def play_predict_number(bot, chat_id, telegram_id: int, bet_amount: float, guess
     max_bet = get_max_bet(get_house_balance())
 
     if bet_amount < min_bet:
-        bot.send_message(chat_id, f"Minimum bet is ₹{min_bet} .")
+        bot.send_message(chat_id, f"Minimum bet is ₹{min_bet}.")
         return
     if bet_amount > max_bet:
-        bot.send_message(chat_id, f"Maximum bet is {round(max_bet, 2)} coins.")
+        bot.send_message(chat_id, f"Maximum bet is ₹{round(max_bet, 2)}.")
         return
     if bet_amount > balance:
-        bot.send_message(chat_id, f"Not enough balance. Your balance: ₹{balance}")
+        bot.send_message(
+            chat_id, f"Not enough balance. Your balance: ₹{balance}"
+        )
         return
 
     adjust_balance(telegram_id, -bet_amount)
@@ -43,17 +52,33 @@ def play_predict_number(bot, chat_id, telegram_id: int, bet_amount: float, guess
         meta={"guess": guess, "number": number},
     )
 
-    new_balance = get_balance(telegram_id)
-    if won:
-        bot.send_message(
-            chat_id,
-            f"🔮 The number was {number}! You guessed {guess} — spot on!\n"
-            f"✅ You won ₹{payout} rupess! ({PAYOUT_MULTIPLIER}x)\nBalance: {new_balance}",
-        )
-        announce_win(display_name or str(telegram_id), payout, "Predict Number")
+    # Format user tag handle
+    if username:
+        user_ref = f"@{username}"
+    elif display_name:
+        user_ref = display_name
     else:
-        bot.send_message(
-            chat_id,
-            f"🔮 The number was {number}. You guessed {guess}.\n"
-            f"❌ You lost ₹{bet_amount} rupeess.\nBalance: ₹{new_balance}",
+        user_ref = f'<a href="tg://user?id={telegram_id}">User</a>'
+
+    formatted_bet = int(bet_amount) if bet_amount.is_integer() else bet_amount
+
+    if won:
+        formatted_payout = int(payout) if payout.is_integer() else payout
+        result_text = (
+            f"<b>PN ♠️ | {user_ref}</b>\n"
+            f"<b>You choose : {guess}</b>\n"
+            f"<b>Current number: {number}</b>\n\n"
+            f"<b>🎉 ₹{formatted_bet} ----&gt; ₹{formatted_payout} ({PAYOUT_MULTIPLIER}x)</b>\n"
+            f"<b>✅ YOU WON</b>"
         )
+        bot.send_message(chat_id, result_text, parse_mode="HTML")
+        announce_win(username or str(telegram_id), payout, "Predict Number")
+    else:
+        result_text = (
+            f"<b>PN ♠️ | {user_ref}</b>\n"
+            f"<b>You choose : {guess}</b>\n"
+            f"<b>Current number: {number}</b>\n\n"
+            f"<b>❌ ₹{formatted_bet} ----&gt; ₹0</b>\n"
+            f"<b>❌ YOU LOST</b>"
+        )
+        bot.send_message(chat_id, result_text, parse_mode="HTML")
