@@ -1,5 +1,5 @@
 import html
-from games.dice_duel import start_dice_game_step, MIN_BET
+from games.dice_duel import start_dice_game_step
 from wallet import get_balance, get_house_balance
 from settings import get_min_bet, get_max_bet
 
@@ -17,9 +17,10 @@ def setup_dice_handlers(bot):
             chat_id = message.chat.id
             telegram_id = message.from_user.id
             username = message.from_user.username
+            first_name = message.from_user.first_name or "User"
 
-            first_name = html.escape(message.from_user.first_name or "User")
-            user_ref = f"@{username}" if username else first_name
+            safe_name = html.escape(first_name)
+            user_ref = f"@{username}" if username else safe_name
 
             if len(args) == 1:
                 help_text = (
@@ -56,7 +57,7 @@ def setup_dice_handlers(bot):
                     return
 
             balance = get_balance(telegram_id)
-            min_bet = max(MIN_BET, get_min_bet())
+            min_bet = get_min_bet()  # Directly fetch dynamic setting
             max_bet = get_max_bet(get_house_balance())
 
             if balance < bet_amount:
@@ -82,7 +83,8 @@ def setup_dice_handlers(bot):
                 telegram_id=telegram_id,
                 bet_amount=bet_amount,
                 rounds=rounds,
-                username=username
+                username=username,
+                first_name=first_name
             )
 
         except Exception as e:
