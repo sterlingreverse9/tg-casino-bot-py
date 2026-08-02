@@ -47,6 +47,14 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
     house = select("house", filters={"id": 1}, single=True)
     update("house", {"id": 1}, {"balance": round(float(house["balance"]) + house_delta, 2)})
 
+    if result == "loss":
+        BASE_RAKEBACK_RATE = 0.005  # 0.5% base; doubled to 1% at claim time if eligible
+        rakeback_earned = round(bet_amount * BASE_RAKEBACK_RATE, 2)
+        if rakeback_earned > 0:
+            update("users", {"telegram_id": telegram_id}, {
+                "rakeback_balance": round(float(user.get("rakeback_balance", 0)) + rakeback_earned, 2),
+            })
+
     if result == "loss" and user.get("referred_by"):
         referrer_id = int(user["referred_by"])
         pct = get_referral_loss_pct()
