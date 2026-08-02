@@ -13,6 +13,7 @@ import handlers.dice_duel
 import handlers.tower
 import handlers.referral
 import handlers.tracking
+import handlers.broadcast
 
 print(f"{CASINO_NAME} bot running...")
 bot.infinity_polling()
