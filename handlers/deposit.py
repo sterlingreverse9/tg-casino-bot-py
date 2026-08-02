@@ -87,7 +87,7 @@ def handle_deposit_text(message):
 
         caption = (
             f"💰 Requested amount: ₹{amount} \n\n"
-            f"UPI ID: {get_deposit_upi()} 
+            f"UPI ID: {get_deposit_upi()}" 
             f"\n\n"
             "Tap the button below once you've 'paid' ."
         )
