@@ -2,7 +2,14 @@ import random
 from wallet import get_balance, adjust_balance, record_bet
 from game_math import payout_for
 
-WIN_CHANCE = 0.5
+WIN_CHANCE = 0.45  # 45% win, 55% loss
+
+won = random.random() < WIN_CHANCE
+
+if won:
+    outcome = choice
+else:
+    outcome = "tails" if choice == "heads" else "heads"
 
 
 def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str):
