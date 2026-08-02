@@ -6,7 +6,7 @@ from game_math import payout_for
 from helpers import announce_win, format_display_name
 from settings import get_min_bet, get_max_bet
 
-WIN_CHANCE = 0.40  # 40% win chance
+WIN_CHANCE = 0.45  # 40% win chance
 
 HEADS_STICKER = "CAACAgQAAxkBAAFQ0lBqb0WwRqG7K3hRKZXSTKB9rnreEAACtCAAAgG_0VKYWqCdNDm4Nz0E"
 TAILS_STICKER = "CAACAgQAAxkBAAFQ0lRqb0XcyDCzfRrYxgvVk89rMD8U7gACWTwAAq7X0FLUZLVck-M2CT0E"
