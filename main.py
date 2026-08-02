@@ -7,6 +7,7 @@ import handlers.admin
 import handlers.rain
 import handlers.deposit
 import handlers.withdraw
+import handlers.rakeback
 import handlers.games
 import handlers.dice_duel
 import handlers.tower
