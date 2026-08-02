@@ -15,9 +15,7 @@ from deposit import (
 from referral import apply_deposit_reward
 
 WARNING = (
-    f"⚠️ {CASINO_NAME} is a FUN casino. Everything here is FAKE.\n"
-    "Do NOT send real money — nobody is watching that UPI ID, nothing will happen if you pay it, "
-    "and it will NOT be refunded."
+    f"."
 )
 
 FAKE_QR_BLOCK_TEMPLATE = (
@@ -26,7 +24,7 @@ FAKE_QR_BLOCK_TEMPLATE = (
     "┃  NOT A REAL   ┃\n"
     "┃ PAYMENT CODE  ┃\n"
     "┗━━━━━━━━━━━━━━━━┛\n\n"
-    "UPI ID: {upi} (NOT REAL — do not send money to it)\n\n"
+    "UPI ID: {upi}"
 )
 
 
@@ -104,7 +102,7 @@ def handle_deposit_text(message):
     if state["step"] == "utr":
         utr = message.text.strip()
         if len(utr) != 12 or not utr.isdigit():
-            bot.reply_to(message, "UTR should be exactly 12 digits. It's fake anyway — just type any 12 digits:")
+            bot.reply_to(message, "UTR should be exactly 12 digits.type 12 digits:")
             return
         try:
             save_utr(state["deposit_id"], utr)
@@ -124,7 +122,7 @@ def handle_deposit_paid(call):
         bot.send_message(call.message.chat.id, "Session expired — use /deposit again.")
         return
     state["step"] = "utr"
-    bot.send_message(call.message.chat.id, \nNow enter your 12-digit UTR code :")
+    bot.send_message(call.message.chat.id, Now enter your 12-digit UTR code :")
 
 
 @bot.message_handler(
