@@ -1,5 +1,5 @@
 import html
-from games.dice_duel import run_dice_vs_bot, MIN_BET
+from games.dice_duel import start_dice_game_step, MIN_BET
 from wallet import get_balance, get_house_balance
 from settings import get_min_bet, get_max_bet
 
@@ -8,7 +8,6 @@ def setup_dice_handlers(bot):
     @bot.message_handler(commands=["dice"])
     def handle_dice_command(message):
         try:
-            # Strip bot username if invoked via /dice@BotName
             raw_text = message.text
             bot_username = bot.get_me().username
             if bot_username and f"@{bot_username}" in raw_text:
@@ -18,12 +17,10 @@ def setup_dice_handlers(bot):
             chat_id = message.chat.id
             telegram_id = message.from_user.id
             username = message.from_user.username
-            
-            # Format user reference safely with HTML escaping
+
             first_name = html.escape(message.from_user.first_name or "User")
             user_ref = f"@{username}" if username else first_name
 
-            # Case 1: Send help menu if user types /dice alone
             if len(args) == 1:
                 help_text = (
                     "<b>🎲 Dice</b>\n\n"
@@ -37,19 +34,16 @@ def setup_dice_handlers(bot):
                 bot.send_message(chat_id, help_text, parse_mode="HTML")
                 return
 
-            # Case 2: PvP Challenge
             if args[1].startswith("@"):
                 bot.send_message(chat_id, "PvP challenges coming soon!")
                 return
 
-            # Parse Bet Amount
             try:
                 bet_amount = float(args[1])
             except ValueError:
                 bot.send_message(chat_id, "Invalid bet amount.")
                 return
 
-            # Parse Rounds (Default: 1)
             rounds = 1
             if len(args) >= 3:
                 try:
@@ -61,7 +55,6 @@ def setup_dice_handlers(bot):
                     bot.send_message(chat_id, "Invalid number of rounds.")
                     return
 
-            # Balance & Limit Checks
             balance = get_balance(telegram_id)
             min_bet = max(MIN_BET, get_min_bet())
             max_bet = get_max_bet(get_house_balance())
@@ -83,8 +76,7 @@ def setup_dice_handlers(bot):
                 bot.send_message(chat_id, f"Maximum bet is ₹{round(max_bet, 2)}.")
                 return
 
-            # Run Game Logic
-            run_dice_vs_bot(
+            start_dice_game_step(
                 bot=bot,
                 chat_id=chat_id,
                 telegram_id=telegram_id,
