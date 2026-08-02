@@ -33,11 +33,14 @@ def cmd_start(message):
 
     if len(parts) >= 2 and parts[1].startswith("ref-"):
         code = parts[1][4:]
+        print(f"[DEBUG] /start ref link hit. code={code!r} by telegram_id={message.from_user.id}")
         existing_user = select("users", filters={"telegram_id": message.from_user.id}, single=True)
+        print(f"[DEBUG] existing_user={'FOUND' if existing_user else 'None (first time)'}")
         get_or_create_user(message.from_user.id, message.from_user.username)
 
         if existing_user is None:
             referrer = get_user_by_referral_code(code)
+            print(f"[DEBUG] referrer lookup for code={code!r} -> {referrer}")
             if referrer and int(referrer["telegram_id"]) != message.from_user.id:
                 set_referred_by(message.from_user.id, int(referrer["telegram_id"]))
                 record_referral_join(int(referrer["telegram_id"]), message.from_user.id, message.from_user.username)
@@ -181,4 +184,3 @@ def cmd_tip(message):
     adjust_balance(sender_id, -amount)
     new_balance = adjust_balance(target_id, amount)
     bot.reply_to(message, f"💸 Tip sent!\nTo: {target_name}\nAmount: ₹{amount}\nTheir balance: ₹{new_balance}")
-
