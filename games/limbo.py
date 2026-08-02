@@ -41,7 +41,7 @@ def roll_result() -> float:
     return round(random.uniform(low, high), 2)
 
 
-def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multiplier: float):
+def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multiplier: float, user_name: str = None):
     balance = get_balance(telegram_id)
     min_bet = get_min_bet()
     max_bet = get_max_bet(get_house_balance())
