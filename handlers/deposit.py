@@ -15,7 +15,7 @@ from deposit import (
 from referral import apply_deposit_reward
 
 WARNING = (
-    f"."
+    f"‎ "
 )
 
 FAKE_QR_BLOCK_TEMPLATE = (
