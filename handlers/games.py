@@ -5,7 +5,12 @@ from game_status import is_game_enabled
 from games.coinflip import play_coinflip
 from games.dice_roll import play_dice_roll
 from games.limbo import play_limbo, parse_multiplier
+from games.predict import play_predict_number
 from helpers import ensure_user
+
+
+def name_of(user):
+    return user.username or user.first_name
 
 
 @bot.message_handler(commands=["cf"])
@@ -43,7 +48,7 @@ def cmd_limbo(message):
     if target_multiplier is None:
         bot.reply_to(message, "Multiplier must be between 1.01x and 1000x, e.g. 2x or 6.")
         return
-    play_limbo(bot, message.chat.id, message.from_user.id, bet_amount, target_multiplier)
+    play_limbo(bot, message.chat.id, message.from_user.id, bet_amount, target_multiplier, name_of(message.from_user))
 
 
 def build_dr_keyboard(telegram_id: int, amount_str: str):
@@ -78,7 +83,7 @@ def cmd_dr(message):
         if bet_amount is None:
             bot.reply_to(message, "Amount must be a number, 'all', or 'half'.")
             return
-        play_dice_roll(bot, message.chat.id, telegram_id, bet_amount, choice)
+        play_dice_roll(bot, message.chat.id, telegram_id, bet_amount, choice, name_of(message.from_user))
         return
 
     amount_str = parts[1] if len(parts) == 2 else "10"
@@ -108,8 +113,26 @@ def handle_dr_callback(call):
     if bet_amount is None:
         bot.send_message(call.message.chat.id, "Amount must be a number, 'all', or 'half'.")
         return
-    play_dice_roll(bot, call.message.chat.id, owner_id, bet_amount, choice)
+    play_dice_roll(bot, call.message.chat.id, owner_id, bet_amount, choice, name_of(call.from_user))
 
 
-# ---------- Admin: balance ----------
-
+@bot.message_handler(commands=["pn", "predictno", "predictnumber"])
+def cmd_predict_number(message):
+    ensure_user(message)
+    if not is_game_enabled("pn"):
+        bot.reply_to(message, "Predict Number is currently disabled.")
+        return
+    parts = message.text.split()
+    if len(parts) != 3:
+        bot.reply_to(message, "Usage: /pn <amount|all|half> <number 1-100>")
+        return
+    bet_amount = resolve_amount(message.from_user.id, parts[1])
+    if bet_amount is None:
+        bot.reply_to(message, "Amount must be a number, 'all', or 'half'.")
+        return
+    try:
+        guess = int(parts[2])
+    except ValueError:
+        bot.reply_to(message, "Number must be a whole number between 1 and 100.")
+        return
+    play_predict_number(bot, message.chat.id, message.from_user.id, bet_amount, guess, name_of(message.from_user))
