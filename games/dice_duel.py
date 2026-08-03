@@ -1,18 +1,8 @@
 import time
 import html
-from wallet import get_balance, add_wager
-from db import select, update
+from wallet import get_balance, adjust_balance, record_bet
 from state import house_edge
 from helpers import announce_win
-
-
-def adjust_balance(telegram_id: int, amount: float):
-    """Safely updates user balance in the database."""
-    user = select("users", filters={"telegram_id": telegram_id}, single=True)
-    if user:
-        current_bal = float(user.get("balance", 0.0))
-        new_bal = current_bal + amount
-        update("users", {"balance": new_bal}, filters={"telegram_id": telegram_id})
 
 
 def start_dice_game_step(
@@ -27,9 +17,8 @@ def start_dice_game_step(
             bot.send_message(chat_id, "❌ Insufficient balance for this bet.")
             return
 
-        # Deduct wager and record wager stats
+        # Deduct initial bet
         adjust_balance(telegram_id, -bet_amount)
-        add_wager(telegram_id, bet_amount)
 
         player_total = 0
         bot_total = 0
@@ -55,8 +44,9 @@ def start_dice_game_step(
         # Outcome evaluation
         if player_total > bot_total:
             payout_multiplier = 2.0 - house_edge
-            win_amount = bet_amount * payout_multiplier
+            win_amount = round(bet_amount * payout_multiplier, 2)
             adjust_balance(telegram_id, win_amount)
+            record_bet(telegram_id, "dice_duel", bet_amount, win_amount, "win")
             net_profit = win_amount - bet_amount
 
             result_text = (
@@ -69,6 +59,7 @@ def start_dice_game_step(
             announce_win(first_name or username or "Player", win_amount, "Dice Duel")
 
         elif player_total < bot_total:
+            record_bet(telegram_id, "dice_duel", bet_amount, 0.0, "loss")
             result_text = (
                 f"💥 <b>YOU LOST!</b>\n\n"
                 f"👤 <b>Your Score:</b> {player_total}\n"
@@ -80,6 +71,7 @@ def start_dice_game_step(
         else:
             # Tie - Return original bet
             adjust_balance(telegram_id, bet_amount)
+            record_bet(telegram_id, "dice_duel", bet_amount, bet_amount, "push")
             result_text = (
                 f"🤝 <b>IT'S A TIE!</b>\n\n"
                 f"👤 <b>Your Score:</b> {player_total}\n"
