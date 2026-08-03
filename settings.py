@@ -3,6 +3,7 @@ from config import HOUSE_EDGE as DEFAULT_HOUSE_EDGE
 
 DEFAULT_MIN_BET = 10
 DEFAULT_MAX_BET_PCT = 0.05  # 5% of house balance if never set
+DEFAULT_MIN_WITHDRAW = 100.0
 
 
 def _get(key, default):
@@ -79,3 +80,11 @@ def get_referral_loss_pct() -> float:
 
 def set_referral_loss_pct(value: float):
     _set("referral_loss_pct", value)
+
+
+def get_min_withdraw() -> float:
+    return float(_get("min_withdraw", DEFAULT_MIN_WITHDRAW))
+
+
+def set_min_withdraw(amount: float):
+    _set("min_withdraw", amount)
