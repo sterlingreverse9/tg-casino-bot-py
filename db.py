@@ -42,3 +42,31 @@ def update(table, filters, values):
     resp.raise_for_status()
     data = resp.json()
     return data[0] if data else None
+
+
+# --- Permission System Helpers ---
+
+def grant_permission(telegram_id: int, permission: str, granted_by: int):
+    try:
+        insert("user_permissions", {
+            "telegram_id": telegram_id,
+            "permission": permission.lower(),
+            "granted_by": granted_by
+        })
+        return True
+    except Exception:
+        return False
+
+
+def has_permission(telegram_id: int, permission: str) -> bool:
+    user = select("users", filters={"telegram_id": telegram_id}, single=True)
+    if user and user.get("is_admin"):
+        return True
+    
+    perm = select("user_permissions", filters={"telegram_id": telegram_id, "permission": permission.lower()}, single=True)
+    return perm is not None
+
+
+def get_all_permitted_users(permission: str):
+    perm_list = select("user_permissions", filters={"permission": permission.lower()})
+    return [p["telegram_id"] for p in perm_list] if perm_list else []
