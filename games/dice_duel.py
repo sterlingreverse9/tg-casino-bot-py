@@ -1,174 +1,125 @@
 import html
-import time
-from wallet import adjust_balance, record_bet
-from settings import get_house_edge
-from helpers import announce_win
+from games.dice_duel import start_dice_game_step
+from wallet import get_balance, get_house_balance
+from settings import get_min_bet, get_max_bet
+
+# Mapping of commands and their aliases to their respective native Telegram emojis & labels
+EMOJI_GAME_CONFIG = {
+    "dice": {"emoji": "🎲", "label": "Dice", "aliases": ["dice"]},
+    "dart": {"emoji": "🎯", "label": "Darts", "aliases": ["dart", "darts"]},
+    "basket": {"emoji": "🏀", "label": "Basketball", "aliases": ["basket", "basketball"]},
+    "slots": {"emoji": "🎰", "label": "Slots", "aliases": ["slots", "slot"]},
+    "foot": {"emoji": "⚽", "label": "Football", "aliases": ["foot", "football"]},
+    "bowl": {"emoji": "🎳", "label": "Bowling", "aliases": ["bowl", "bowling"]},
+}
 
 
-def decide_round_winner(a_sum: int, b_sum: int, mode: str = "classic"):
-    if a_sum == b_sum:
-        return None  # tie -> reroll round
-    if mode == "crazy":
-        return "a" if a_sum < b_sum else "b"
-    return "a" if a_sum > b_sum else "b"
+def setup_dice_handlers(bot):
+    # Collect all command aliases into a single list for registration
+    all_commands = []
+    for cfg in EMOJI_GAME_CONFIG.values():
+        all_commands.extend(cfg["aliases"])
 
+    @bot.message_handler(commands=all_commands)
+    def handle_emoji_game_command(message):
+        try:
+            raw_text = message.text.strip()
+            bot_username = bot.get_me().username
+            if bot_username and f"@{bot_username}" in raw_text:
+                raw_text = raw_text.replace(f"@{bot_username}", "")
 
-def start_dice_game_step(bot, chat_id, telegram_id: int, bet_amount: float, rounds: int, username: str = None, first_name: str = "User"):
-    """Deducts balance, prints initial message, and starts the turn flow."""
-    adjust_balance(telegram_id, -bet_amount)
+            args = raw_text.split()
+            cmd_name = args[0].lstrip("/").lower()
 
-    safe_name = html.escape(first_name)
-    user_ref = f"@{username}" if username else f'<a href="tg://user?id={telegram_id}">{safe_name}</a>'
-    formatted_bet = int(bet_amount) if bet_amount.is_integer() else bet_amount
+            # Identify game configuration based on invoked command alias
+            game_cfg = None
+            for cfg in EMOJI_GAME_CONFIG.values():
+                if cmd_name in cfg["aliases"]:
+                    game_cfg = cfg
+                    break
 
-    game_state = {
-        "chat_id": chat_id,
-        "telegram_id": telegram_id,
-        "username": username,
-        "user_ref": user_ref,
-        "bet_amount": bet_amount,
-        "total_rounds": rounds,
-        "current_round": 1,
-        "player_wins": 0,
-        "bot_wins": 0,
-        "round_history": [],
-    }
+            if not game_cfg:
+                game_cfg = EMOJI_GAME_CONFIG["dice"]
 
-    prompt_text = (
-        f"<b>🎲 Dice vs Bot ₹{formatted_bet}</b>\n"
-        f"<b>Round 1 of {rounds}</b>\n\n"
-        f"👤 {user_ref} — send/copy this emoji now: 🎲"
-    )
-    bot.send_message(chat_id, prompt_text, parse_mode="HTML")
+            emoji = game_cfg["emoji"]
+            label = game_cfg["label"]
+            main_cmd = game_cfg["aliases"][0]
 
-    bot.register_next_step_handler_by_chat_id(
-        chat_id,
-        lambda msg: handle_player_dice_turn(bot, msg, game_state)
-    )
+            chat_id = message.chat.id
+            telegram_id = message.from_user.id
+            username = message.from_user.username
+            first_name = message.from_user.first_name or "User"
 
+            safe_name = html.escape(first_name)
+            user_ref = f"@{username}" if username else safe_name
 
-def handle_player_dice_turn(bot, message, state):
-    if message.from_user.id != state["telegram_id"]:
-        bot.register_next_step_handler_by_chat_id(
-            state["chat_id"],
-            lambda msg: handle_player_dice_turn(bot, msg, state)
-        )
-        return
+            # Help message if no parameters provided
+            if len(args) == 1:
+                help_text = (
+                    f"<b>{emoji} {label}</b>\n\n"
+                    f"<b>vs Bot:</b>\n"
+                    f"<code>/{main_cmd} 50</code> — 1 round\n"
+                    f"<code>/{main_cmd} 50 3</code> — 3 rounds\n\n"
+                    f"<b>vs Player:</b>\n"
+                    f"<code>/{main_cmd} @user 50</code> — challenge a player\n"
+                    f"<code>/{main_cmd} @user 50 3</code> — with amount only; rounds & mode selected via buttons"
+                )
+                bot.send_message(chat_id, help_text, parse_mode="HTML")
+                return
 
-    if not message.dice or message.dice.emoji != "🎲":
-        bot.reply_to(message, "Please send a valid 🎲 emoji to take your turn!")
-        bot.register_next_step_handler_by_chat_id(
-            state["chat_id"],
-            lambda msg: handle_player_dice_turn(bot, msg, state)
-        )
-        return
+            if args[1].startswith("@"):
+                bot.send_message(chat_id, "PvP challenges coming soon!")
+                return
 
-    player_roll = message.dice.value
+            try:
+                bet_amount = float(args[1])
+            except ValueError:
+                bot.send_message(chat_id, "Invalid bet amount.")
+                return
 
-    bot_dice_msg = bot.send_dice(state["chat_id"], emoji="🎲")
-    bot_roll = bot_dice_msg.dice.value
+            rounds = 1
+            if len(args) >= 3:
+                try:
+                    rounds = int(args[2])
+                    if rounds < 1 or rounds > 5:
+                        bot.send_message(chat_id, "Rounds must be between 1 and 5.")
+                        return
+                except ValueError:
+                    bot.send_message(chat_id, "Invalid number of rounds.")
+                    return
 
-    time.sleep(3)
+            balance = get_balance(telegram_id)
+            min_bet = get_min_bet()
+            max_bet = get_max_bet(get_house_balance())
 
-    winner = decide_round_winner(player_roll, bot_roll, mode="classic")
+            if balance < bet_amount:
+                formatted_bal = int(balance) if balance.is_integer() else balance
+                bot.send_message(
+                    chat_id,
+                    f"❌ {user_ref} Not quite enough in the tank 💸 — you've got ₹{formatted_bal}",
+                    parse_mode="HTML"
+                )
+                return
 
-    if winner is None:
-        bot.send_message(
-            state["chat_id"],
-            f"🤝 <b>Tie ({player_roll} vs {bot_roll})! Roll again 🎲</b>",
-            parse_mode="HTML"
-        )
-        bot.register_next_step_handler_by_chat_id(
-            state["chat_id"],
-            lambda msg: handle_player_dice_turn(bot, msg, state)
-        )
-        return
+            if bet_amount < min_bet:
+                bot.send_message(chat_id, f"Minimum bet is ₹{min_bet}.")
+                return
 
-    if winner == "a":
-        state["player_wins"] += 1
-        round_res = f"R{state['current_round']}: You 🎲{player_roll} vs Bot 🎲{bot_roll} (Won)"
-    else:
-        state["bot_wins"] += 1
-        round_res = f"R{state['current_round']}: You 🎲{player_roll} vs Bot 🎲{bot_roll} (Lost)"
+            if bet_amount > max_bet:
+                bot.send_message(chat_id, f"Maximum bet is ₹{round(max_bet, 2)}.")
+                return
 
-    state["round_history"].append(round_res)
+            # Pass emoji to start_dice_game_step
+            start_dice_game_step(
+                bot=bot,
+                chat_id=chat_id,
+                telegram_id=telegram_id,
+                bet_amount=bet_amount,
+                rounds=rounds,
+                username=username,
+                first_name=first_name,
+                emoji=emoji
+            )
 
-    # Tiebreaker handling if overall score is equal after playing all rounds
-    if state["current_round"] >= state["total_rounds"] and state["player_wins"] == state["bot_wins"]:
-        state["current_round"] += 1
-        bot.send_message(
-            state["chat_id"],
-            f"⚔️ <b>Tie Game ({state['player_wins']}-{state['bot_wins']})! Tiebreaker Round {state['current_round']}</b>\n"
-            f"👤 {state['user_ref']} — Send 🎲 now!",
-            parse_mode="HTML"
-        )
-        bot.register_next_step_handler_by_chat_id(
-            state["chat_id"],
-            lambda msg: handle_player_dice_turn(bot, msg, state)
-        )
-        return
-
-    if state["current_round"] < state["total_rounds"]:
-        state["current_round"] += 1
-        bot.send_message(
-            state["chat_id"],
-            f"<b>Round {state['current_round']} of {state['total_rounds']}</b>\n"
-            f"👤 {state['user_ref']} — Send 1x 🎲 now!",
-            parse_mode="HTML"
-        )
-        bot.register_next_step_handler_by_chat_id(
-            state["chat_id"],
-            lambda msg: handle_player_dice_turn(bot, msg, state)
-        )
-    else:
-        finish_dice_game(bot, state)
-
-
-def finish_dice_game(bot, state):
-    won = state["player_wins"] > state["bot_wins"]
-    bet_amount = state["bet_amount"]
-    telegram_id = state["telegram_id"]
-    username = state["username"]
-    user_ref = state["user_ref"]
-
-    # Dynamic house edge calculation
-    raw_edge = float(get_house_edge())
-    edge_decimal = raw_edge if raw_edge < 1.0 else (raw_edge / 100.0)
-    
-    # Correct formula: 2.0x minus the house edge
-    multiplier = round(2.0 - edge_decimal, 2)
-
-    payout = round(bet_amount * multiplier, 2) if won else 0
-
-    if won:
-        adjust_balance(telegram_id, payout)
-        announce_win(username or str(telegram_id), payout, "Dice vs Bot")
-
-    record_bet(
-        telegram_id=telegram_id,
-        game="dice_vs_bot",
-        bet_amount=bet_amount,
-        payout=payout,
-        result="win" if won else "loss",
-        meta={"rounds": state["current_round"], "player_score": state["player_wins"], "bot_score": state["bot_wins"]},
-    )
-
-    formatted_bet = int(bet_amount) if bet_amount.is_integer() else bet_amount
-    formatted_payout = int(payout) if payout.is_integer() else payout
-
-    history_text = "\n".join([f"• {h}" for h in state["round_history"]])
-
-    if won:
-        msg_text = (
-            f"🎉 {user_ref} <b>You won! Score: {state['player_wins']}-{state['bot_wins']}</b>\n"
-            f"💰 <b>Payout: ₹{formatted_payout} ({multiplier:.2f}x)</b>\n\n"
-            f"<b>Round Summary:</b>\n{history_text}"
-        )
-    else:
-        msg_text = (
-            f"❌ {user_ref} <b>Bot won! Score: {state['bot_wins']}-{state['player_wins']}</b>\n"
-            f"💸 <b>You lost ₹{formatted_bet}</b>\n\n"
-            f"<b>Round Summary:</b>\n{history_text}"
-        )
-
-    bot.send_message(state["chat_id"], msg_text, parse_mode="HTML")
+        except Exception as e:
+            print(f"Error in emoji game command handler: {e}")
