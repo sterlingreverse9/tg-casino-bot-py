@@ -1,7 +1,7 @@
 import time
 import html
 from wallet import get_balance, adjust_balance, record_bet
-from state import house_edge
+from settings import get_house_edge
 from helpers import announce_win
 
 
@@ -42,6 +42,8 @@ def start_dice_game_step(
             time.sleep(2.5)
 
         # Outcome evaluation
+        house_edge = get_house_edge() if callable(get_house_edge) else 0.05
+
         if player_total > bot_total:
             payout_multiplier = 2.0 - house_edge
             win_amount = round(bet_amount * payout_multiplier, 2)
