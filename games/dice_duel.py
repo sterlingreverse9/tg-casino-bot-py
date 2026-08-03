@@ -4,7 +4,7 @@ from settings import get_min_bet, get_max_bet
 
 # Mapping of commands and their aliases to their respective native Telegram emojis & labels
 EMOJI_GAME_CONFIG = {
-    "dice": {"emoji": "🎲", "label": "Dice", "aliases": ["dice"]},
+    "dice": {"emoji": "🎲", "label": "Dice", "aliases": ["dice", "dr"]},
     "dart": {"emoji": "🎯", "label": "Darts", "aliases": ["dart", "darts"]},
     "basket": {"emoji": "🏀", "label": "Basketball", "aliases": ["basket", "basketball"]},
     "slots": {"emoji": "🎰", "label": "Slots", "aliases": ["slots", "slot"]},
@@ -22,6 +22,9 @@ def setup_dice_handlers(bot):
     @bot.message_handler(commands=all_commands)
     def handle_emoji_game_command(message):
         try:
+            # Dynamic import inside function prevents circular import crashes
+            from games.dice_duel import start_dice_game_step
+
             raw_text = message.text.strip()
             bot_username = bot.get_me().username
             if bot_username and f"@{bot_username}" in raw_text:
@@ -96,7 +99,7 @@ def setup_dice_handlers(bot):
                 bot.send_message(
                     chat_id,
                     f"❌ {user_ref} Not quite enough in the tank 💸 — you've got ₹{formatted_bal}",
-                    parse_mode="HTML"
+                    parse_mode="HTML",
                 )
                 return
 
@@ -108,7 +111,7 @@ def setup_dice_handlers(bot):
                 bot.send_message(chat_id, f"Maximum bet is ₹{round(max_bet, 2)}.")
                 return
 
-            # Pass emoji to start_dice_game_step
+            # Pass selected native emoji to the game step launcher
             start_dice_game_step(
                 bot=bot,
                 chat_id=chat_id,
@@ -117,7 +120,7 @@ def setup_dice_handlers(bot):
                 rounds=rounds,
                 username=username,
                 first_name=first_name,
-                emoji=emoji
+                emoji=emoji,
             )
 
         except Exception as e:
