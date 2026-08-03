@@ -1,5 +1,4 @@
 import html
-from games.dice_duel import start_dice_game_step
 from wallet import get_balance, get_house_balance
 from settings import get_min_bet, get_max_bet
 
