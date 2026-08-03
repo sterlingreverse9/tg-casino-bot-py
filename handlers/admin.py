@@ -1,14 +1,60 @@
+import html
 from bot_instance import bot
-from db import insert, update, select
+from db import insert, update, select, grant_permission, has_permission
 from wallet import get_or_create_user, adjust_balance, resolve_amount
 from settings import get_min_bet, set_min_bet, get_max_bet, set_max_bet, get_house_edge, set_house_edge
 from middleware.admin import is_admin
 from helpers import get_target_user, get_all_admin_ids
 
+SUPER_ADMIN_USERNAME = "mrpuppyx"
+
+
+def is_super_admin(user):
+    username = user.username or ""
+    return username.lower() == SUPER_ADMIN_USERNAME.lower()
+
+
+@bot.message_handler(commands=["giveaccess"])
+def cmd_giveaccess(message):
+    if not is_super_admin(message.from_user):
+        bot.reply_to(message, "❌ Only @mrpuppyx can grant access.")
+        return
+
+    parts = message.text.split()
+    cmd_name = None
+    target_id = None
+    target_username = None
+
+    if message.reply_to_message:
+        if len(parts) < 2:
+            bot.reply_to(message, "Usage (reply): /giveaccess <command_name>\nExample: /giveaccess deposit")
+            return
+        cmd_name = parts[1].lower().strip("/")
+        target_id = message.reply_to_message.from_user.id
+        target_username = message.reply_to_message.from_user.username
+    else:
+        if len(parts) < 3:
+            bot.reply_to(message, "Usage: /giveaccess <command_name> <@username|telegram_id>\nExample: /giveaccess deposit @user")
+            return
+        cmd_name = parts[1].lower().strip("/")
+        target_id = get_target_user(message, parts[2])
+        if not target_id:
+            bot.reply_to(message, "User not found.")
+            return
+
+    get_or_create_user(target_id, target_username)
+    success = grant_permission(target_id, cmd_name, message.from_user.id)
+
+    user_ref = f"@{target_username}" if target_username else target_id
+    if success:
+        bot.reply_to(message, f"✅ Granted permission '<b>{cmd_name}</b>' to {user_ref}.", parse_mode="HTML")
+    else:
+        bot.reply_to(message, f"ℹ️ {user_ref} already has access to '<b>{cmd_name}</b>'.", parse_mode="HTML")
+
 
 @bot.message_handler(commands=["add"])
 def cmd_add(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "add"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     parts = message.text.split()
@@ -36,7 +82,7 @@ def cmd_add(message):
 
 @bot.message_handler(commands=["deduct"])
 def cmd_deduct(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "deduct"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     parts = message.text.split()
@@ -63,9 +109,6 @@ def cmd_deduct(message):
     new_balance = adjust_balance(target_id, -amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
     bot.reply_to(message, f"✅ Deducted {amount} coins\nUser: {target_id}\nBalance: {new_balance}")
-
-
-# ---------- Admin: promote/demote ----------
 
 
 @bot.message_handler(commands=["promote"])
@@ -101,7 +144,7 @@ def cmd_demote(message):
 
 @bot.message_handler(commands=["updatehb"])
 def cmd_updatehb(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "updatehb"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     parts = message.text.split()
@@ -116,7 +159,7 @@ def cmd_updatehb(message):
 
 @bot.message_handler(commands=["minbet"])
 def cmd_minbet(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "minbet"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     parts = message.text.split()
@@ -134,7 +177,7 @@ def cmd_minbet(message):
 
 @bot.message_handler(commands=["maxbet"])
 def cmd_maxbet(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "maxbet"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     parts = message.text.split()
@@ -154,7 +197,7 @@ def cmd_maxbet(message):
 
 @bot.message_handler(commands=["sethousedge"])
 def cmd_sethousedge(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "sethousedge"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     parts = message.text.split()
@@ -175,7 +218,7 @@ def cmd_sethousedge(message):
 
 @bot.message_handler(commands=["resetld"])
 def cmd_resetld(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "resetld"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     update("users", {}, {"total_wagered": 0, "total_won": 0, "total_lost": 0})
@@ -184,7 +227,7 @@ def cmd_resetld(message):
 
 @bot.message_handler(commands=["killbal"])
 def cmd_killbal(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "killbal"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     update("users", {}, {"balance": 0})
@@ -193,11 +236,12 @@ def cmd_killbal(message):
 
 @bot.message_handler(commands=["admincommands"])
 def cmd_admin_commands(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "admincommands"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     text = (
         "🛠️ Admin Commands\n\n"
+        "Access Control: /giveaccess <cmd> <user>\n"
         "Balance: /add /deduct /killbal /resetld /updatehb\n"
         "Access: /promote /demote\n"
         "Game economy: /minbet /maxbet /sethousedge\n"
@@ -223,7 +267,3 @@ def cmd_admins(message):
         username = u.get("username") if u else None
         lines.append(f"👑 @{username}" if username else f"👑 {admin_id}")
     bot.reply_to(message, "👑 Admins:\n" + "\n".join(lines))
-
-
-# ---------- Admin: rain ----------
-
