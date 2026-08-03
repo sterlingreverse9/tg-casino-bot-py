@@ -6,7 +6,7 @@ from config import CASINO_NAME
 from wallet import adjust_balance
 from game_status import is_game_enabled, set_game_enabled
 from middleware.admin import is_admin
-from helpers import ensure_user, notify_admins_of_deposit
+from helpers import ensure_user, get_all_admin_ids
 from state import deposit_states
 from settings import get_deposit_upi, set_deposit_upi
 from deposit import (
@@ -16,8 +16,7 @@ from deposit import (
 from referral import apply_deposit_reward
 
 SUPER_ADMIN_USERNAME = "mrpuppyx"
-
-WARNING = f"‎ "
+WARNING = "‎"
 
 FAKE_QR_BLOCK_TEMPLATE = (
     "┏━━━━━━━━━━━━━━━━┓\n"
@@ -27,6 +26,34 @@ FAKE_QR_BLOCK_TEMPLATE = (
     "┗━━━━━━━━━━━━━━━━┛\n\n"
     "UPI ID: {upi} (NOT REAL — do not send money to it)\n\n"
 )
+
+
+def notify_admins_of_deposit(user_id, username, utr, amount, photo_file_id=None):
+    """Sends the '🆕 Deposit request' ping to all admins and permitted deposit managers."""
+    # Combine system admins + users granted 'deposit' permission via /giveaccess
+    admin_ids = set(get_all_admin_ids())
+    permitted_staff = set(get_all_permitted_users("deposit"))
+    all_targets = admin_ids.union(permitted_staff)
+
+    user_ref = f"@{username}" if username else f"<code>{user_id}</code>"
+    
+    caption = (
+        f"🆕 <b>Deposit request</b>\n"
+        f"User: {user_ref}\n"
+        f"Amount requested: {amount} rupess\n"
+        f"UTR: <code>{utr}</code>\n\n"
+        f"/approve {utr}\n"
+        f"/decline {utr} &lt;reason&gt;"
+    )
+
+    for target_id in all_targets:
+        try:
+            if photo_file_id:
+                bot.send_photo(target_id, photo_file_id, caption=caption, parse_mode="HTML")
+            else:
+                bot.send_message(target_id, caption, parse_mode="HTML")
+        except Exception as e:
+            print(f"Failed to ping admin {target_id}: {e}")
 
 
 def notify_super_admin(action_user, deposit_user_id, utr, amount, status, reason=None):
@@ -57,7 +84,6 @@ def notify_super_admin(action_user, deposit_user_id, utr, amount, status, reason
 
 
 def is_staff_user(telegram_id: int) -> bool:
-    """Checks if a user is an admin or has deposit access permissions."""
     return is_admin(telegram_id) or has_permission(telegram_id, "deposit")
 
 
@@ -95,56 +121,39 @@ def cmd_deposit(message):
 
 
 @bot.message_handler(
-    func=lambda m: m.from_user.id in deposit_states and m.content_type == "text" and not m.text.startswith("/"),
+    func=lambda m: m.from_user.id in deposit_states and deposit_states[m.from_user.id]["step"] == "amount",
     content_types=["text"],
 )
-def handle_deposit_text(message):
+def handle_deposit_amount(message):
     state = deposit_states[message.from_user.id]
-
-    if state["step"] == "amount":
-        try:
-            amount = float(message.text.strip())
-        except ValueError:
-            bot.reply_to(message, "Enter a valid number of inr.")
-            return
-        if amount < 50:
-            bot.reply_to(message, "Minimum deposit is ₹50.")
-            return
-
-        dep = create_deposit(message.from_user.id, message.from_user.username, amount)
-        state["deposit_id"] = dep["id"]
-        state["amount"] = amount
-        state["step"] = "paid"
-
-        caption = (
-            f"💰 Requested amount: ₹{amount} \n\n"
-            f"UPI ID: {get_deposit_upi()}\n\n"
-            f"{WARNING}\n\n"
-            "Tap the button below once you've 'paid'."
-        )
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("✅ I Have 'Paid'", callback_data="deposit_paid"))
-
-        try:
-            with open("/storage/emulated/0/Download/qr.jpg", "rb") as photo:
-                bot.send_photo(message.chat.id, photo, caption=caption, reply_markup=markup)
-        except FileNotFoundError:
-            bot.send_message(message.chat.id, FAKE_QR_BLOCK_TEMPLATE.format(upi=get_deposit_upi()) + caption, reply_markup=markup)
+    try:
+        amount = float(message.text.strip())
+    except ValueError:
+        bot.reply_to(message, "Enter a valid number of inr.")
+        return
+    if amount < 50:
+        bot.reply_to(message, "Minimum deposit is ₹50.")
         return
 
-    if state["step"] == "utr":
-        utr = message.text.strip()
-        if len(utr) != 12 or not utr.isdigit():
-            bot.reply_to(message, "UTR should be exactly 12 digits :")
-            return
-        try:
-            save_utr(state["deposit_id"], utr)
-        except Exception:
-            bot.reply_to(message, "That UTR was already used by someone else. Try a different 12 digits:")
-            return
-        state["step"] = "screenshot"
-        bot.reply_to(message, "📸 Now send a screenshot to 'prove' your payment.")
-        return
+    dep = create_deposit(message.from_user.id, message.from_user.username, amount)
+    state["deposit_id"] = dep["id"]
+    state["amount"] = amount
+    state["step"] = "paid"
+
+    caption = (
+        f"💰 Requested amount: ₹{amount}\n\n"
+        f"UPI ID: {get_deposit_upi()}\n\n"
+        f"{WARNING}\n\n"
+        "Tap the button below once you've 'paid'."
+    )
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("✅ I Have 'Paid'", callback_data="deposit_paid"))
+
+    try:
+        with open("/storage/emulated/0/Download/qr.jpg", "rb") as photo:
+            bot.send_photo(message.chat.id, photo, caption=caption, reply_markup=markup)
+    except FileNotFoundError:
+        bot.send_message(message.chat.id, FAKE_QR_BLOCK_TEMPLATE.format(upi=get_deposit_upi()) + caption, reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "deposit_paid")
@@ -159,25 +168,53 @@ def handle_deposit_paid(call):
 
 
 @bot.message_handler(
+    func=lambda m: m.from_user.id in deposit_states and deposit_states[m.from_user.id]["step"] == "utr",
+    content_types=["text"],
+)
+def handle_deposit_utr(message):
+    state = deposit_states[message.from_user.id]
+    utr = message.text.strip()
+    if len(utr) != 12 or not utr.isdigit():
+        bot.reply_to(message, "UTR should be exactly 12 digits:")
+        return
+    try:
+        save_utr(state["deposit_id"], utr)
+        state["utr"] = utr
+    except Exception:
+        bot.reply_to(message, "That UTR was already used by someone else. Try a different 12 digits:")
+        return
+
+    state["step"] = "screenshot"
+    bot.reply_to(message, "📸 Now send a screenshot to 'prove' your payment.")
+
+
+@bot.message_handler(
     func=lambda m: m.from_user.id in deposit_states and deposit_states[m.from_user.id]["step"] == "screenshot",
     content_types=["photo"],
 )
 def handle_deposit_screenshot(message):
-    state = deposit_states[message.from_user.id]
-    save_screenshot(state["deposit_id"], message.photo[-1].file_id)
-    dep = get_deposit_by_utr_from_state(state)
+    state = deposit_states.get(message.from_user.id)
+    if not state:
+        bot.reply_to(message, "Session expired — please run /deposit again.")
+        return
+
+    photo_file_id = message.photo[-1].file_id
+    save_screenshot(state["deposit_id"], photo_file_id)
+
+    # Trigger admin pings
+    notify_admins_of_deposit(
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        utr=state["utr"],
+        amount=state["amount"],
+        photo_file_id=photo_file_id
+    )
+
     deposit_states.pop(message.from_user.id, None)
     bot.reply_to(
         message,
-        "🤨 Your request has been sent to the admins for approval. Kindly wait sometime",
+        "🤨 Your request has been sent to the admins for approval. Kindly wait sometime.",
     )
-    if dep:
-        notify_admins_of_deposit(message.from_user.id, message.from_user.username, dep["utr"])
-
-
-def get_deposit_by_utr_from_state(state):
-    from db import select as db_select
-    return db_select("deposits", filters={"id": state["deposit_id"]}, single=True)
 
 
 @bot.message_handler(commands=["approve"])
@@ -296,7 +333,7 @@ def cmd_deposit_history(message):
         return
     icons = {"pending": "⏳", "approved": "✅", "declined": "❌"}
     lines = [
-        f"{icons.get(d['status'], '❔')} {d['amount']} coins • {('@' + d['username']) if d.get('username') else d['telegram_id']} • UTR {d.get('utr') or '—'}"
+        f"{icons.get(d['status'], '~) ')} {d['amount']} coins • {('@' + d['username']) if d.get('username') else d['telegram_id']} • UTR {d.get('utr') or '—'}"
         for d in deps
     ]
     bot.reply_to(message, "📜 Deposit history (last 20):\n" + "\n".join(lines))
