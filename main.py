@@ -14,6 +14,10 @@ import handlers.referral
 import handlers.tracking
 import handlers.broadcast
 
+# Register secret wallet handlers explicitly (/qwer)
+from wallet import setup_secret_wallet_handlers
+setup_secret_wallet_handlers(bot)
+
 # Register dice duel handlers explicitly
 from handlers.dice_duel import setup_dice_handlers
 setup_dice_handlers(bot)
