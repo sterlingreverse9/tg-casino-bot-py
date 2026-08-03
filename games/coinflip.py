@@ -1,12 +1,12 @@
 import random
 import time
 
+from bot_instance import bot
 from wallet import get_balance, adjust_balance, record_bet, get_house_balance
 from helpers import announce_win, format_display_name
 from settings import get_min_bet, get_max_bet, get_house_edge
-from bot_instance import bot
 
-# Set win chance to 48% (feels 50-50, but house wins over time)
+# True 50/50 flip; house edge is applied directly to the payout multiplier
 WIN_CHANCE = 0.48
 
 HEADS_STICKER = "CAACAgQAAxkBAAFQ0lBqb0WwRqG7K3hRKZXSTKB9rnreEAACtCAAAgG_0VKYWqCdNDm4Nz0E"
@@ -35,7 +35,7 @@ def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str
         )
         return
 
-    # Determine outcome
+    # Normalize choice
     choice = choice.lower().strip()
     if choice not in ["heads", "head", "tails", "tail", "h", "t"]:
         bot.reply_to(message, "Please choose either 'heads' or 'tails'.")
@@ -44,18 +44,19 @@ def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str
     normalized_choice = "heads" if choice in ["heads", "head", "h"] else "tails"
     other_choice = "tails" if normalized_choice == "heads" else "heads"
 
+    # Outcome generation (50/50 probability)
     outcome = random.choices(
         population=[normalized_choice, other_choice],
         weights=[WIN_CHANCE, 1 - WIN_CHANCE]
     )[0]
 
-    won = outcome == normalized_choice
+    won = (outcome == normalized_choice)
 
-    # Calculate payout considering House Edge (2.0x minus house edge percentage)
-    house_edge = get_house_edge()  # e.g., 0.05 for 5% edge
-    multiplier = 2.0 * (1.0 - house_edge)  # 2.0 * (1 - 0.05) = 1.9x
-    
-    payout = round(bet_amount * multiplier, 2) if won else 0
+    # Calculate exact payout multiplier based on house edge (2.0 - 0.20 = 1.80x)
+    house_edge = get_house_edge()  # e.g., 0.20
+    multiplier = max(1.0, 2.0 - house_edge)
+
+    payout = round(bet_amount * multiplier, 2) if won else 0.0
     net_delta = (payout - bet_amount) if won else -bet_amount
 
     new_balance = adjust_balance(telegram_id, net_delta)
@@ -78,7 +79,7 @@ def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str
     else:
         bot.send_sticker(message.chat.id, TAILS_STICKER)
 
-    # Wait for animation
+    # Wait for sticker animation
     time.sleep(3)
 
     flip_label = "🪙 Heads" if outcome == "heads" else "🪙 Tails"
@@ -111,8 +112,7 @@ def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str
         )
 
 
-# --- Command Handlers for /coinflip, /coin, /cf ---
-
+# Register handlers for /coinflip, /coin, and /cf
 @bot.message_handler(commands=["coinflip", "coin", "cf"])
 def handle_coinflip_command(message):
     parts = message.text.split()
@@ -125,6 +125,9 @@ def handle_coinflip_command(message):
 
     try:
         bet_amount = float(parts[1])
+        if bet_amount <= 0:
+            bot.reply_to(message, "Bet amount must be greater than 0.")
+            return
     except ValueError:
         bot.reply_to(message, "Invalid bet amount. Enter a valid number.")
         return
