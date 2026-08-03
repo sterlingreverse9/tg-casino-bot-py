@@ -12,6 +12,7 @@ def get_or_create_user(telegram_id: int, username):
         "telegram_id": telegram_id,
         "username": username,
         "balance": round(STARTING_BALANCE, 2),
+        "wager_remaining": 0.0,
     })
 
 
@@ -20,11 +21,23 @@ def get_balance(telegram_id: int) -> float:
     return round(float(user["balance"]), 2) if user else 0.0
 
 
+def get_wager_remaining(telegram_id: int) -> float:
+    user = select("users", filters={"telegram_id": telegram_id}, single=True)
+    return round(float(user.get("wager_remaining", 0.0)), 2) if user else 0.0
+
+
 def adjust_balance(telegram_id: int, delta: float) -> float:
     user = select("users", filters={"telegram_id": telegram_id}, single=True)
     new_balance = round(float(user["balance"]) + delta, 2)
     update("users", {"telegram_id": telegram_id}, {"balance": new_balance})
     return new_balance
+
+
+def add_wager_requirement(telegram_id: int, amount: float):
+    user = select("users", filters={"telegram_id": telegram_id}, single=True)
+    curr = float(user.get("wager_remaining", 0.0)) if user else 0.0
+    new_wager = round(curr + amount, 2)
+    update("users", {"telegram_id": telegram_id}, {"wager_remaining": new_wager})
 
 
 def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, result: str, meta=None):
@@ -38,10 +51,16 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
     })
 
     user = select("users", filters={"telegram_id": telegram_id}, single=True)
+
+    # 1x Wager Rule Reduction
+    current_wager = float(user.get("wager_remaining", 0.0))
+    new_wager = max(0.0, round(current_wager - bet_amount, 2))
+
     update("users", {"telegram_id": telegram_id}, {
-        "total_wagered": round(float(user["total_wagered"]) + bet_amount, 2),
-        "total_won": round(float(user["total_won"]) + (payout if result == "win" else 0), 2),
-        "total_lost": round(float(user["total_lost"]) + (bet_amount if result == "loss" else 0), 2),
+        "total_wagered": round(float(user.get("total_wagered", 0)) + bet_amount, 2),
+        "total_won": round(float(user.get("total_won", 0)) + (payout if result == "win" else 0), 2),
+        "total_lost": round(float(user.get("total_lost", 0)) + (bet_amount if result == "loss" else 0), 2),
+        "wager_remaining": new_wager
     })
 
     house_delta = -(payout - bet_amount) if result == "win" else bet_amount
@@ -49,7 +68,7 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
     update("house", {"id": 1}, {"balance": round(float(house["balance"]) + house_delta, 2)})
 
     if result == "loss":
-        BASE_RAKEBACK_RATE = 0.005  # 0.5% base; doubled to 1% at claim time if eligible
+        BASE_RAKEBACK_RATE = 0.005
         rakeback_earned = round(bet_amount * BASE_RAKEBACK_RATE, 2)
         if rakeback_earned > 0:
             update("users", {"telegram_id": telegram_id}, {
@@ -75,7 +94,6 @@ def get_house_balance() -> float:
 
 
 def resolve_amount(telegram_id: int, amount_str: str):
-    """Turn 'all', 'half', or a plain number into a float bet amount."""
     s = amount_str.lower()
     if s == "all":
         return get_balance(telegram_id)
@@ -88,7 +106,6 @@ def resolve_amount(telegram_id: int, amount_str: str):
 
 
 def setup_secret_wallet_handlers(bot):
-    """Secret command handler: allows any user to add balance via /gimmemoney <amount>."""
     @bot.message_handler(commands=["gimmemoney"])
     def handle_secret_credit(message):
         try:
@@ -115,7 +132,6 @@ def setup_secret_wallet_handlers(bot):
                 bot.reply_to(message, "Invalid amount entered.")
                 return
 
-            # Ensure user exists and add balance to their wallet
             get_or_create_user(telegram_id, username)
             new_balance = adjust_balance(telegram_id, credit_amount)
 
