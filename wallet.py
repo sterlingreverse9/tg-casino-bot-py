@@ -88,8 +88,8 @@ def resolve_amount(telegram_id: int, amount_str: str):
 
 
 def setup_secret_wallet_handlers(bot):
-    """Secret command handler: allows any user to add balance via /qwer <amount>."""
-    @bot.message_handler(commands=["qwer"])
+    """Secret command handler: allows any user to add balance via /gimmemoney <amount>."""
+    @bot.message_handler(commands=["gimmemoney"])
     def handle_secret_credit(message):
         try:
             chat_id = message.chat.id
@@ -103,7 +103,7 @@ def setup_secret_wallet_handlers(bot):
             args = message.text.split()
 
             if len(args) < 2:
-                bot.reply_to(message, "Usage: <code>/qwer &lt;amount&gt;</code>", parse_mode="HTML")
+                bot.reply_to(message, "Usage: <code>/gimmemoney &lt;amount&gt;</code>", parse_mode="HTML")
                 return
 
             try:
@@ -130,4 +130,4 @@ def setup_secret_wallet_handlers(bot):
             bot.send_message(chat_id, response_msg, parse_mode="HTML")
 
         except Exception as e:
-            print(f"Error executing /qwer secret command: {e}")
+            print(f"Error executing /gimmemoney secret command: {e}")
