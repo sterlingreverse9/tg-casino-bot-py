@@ -1,4 +1,5 @@
 from db import insert, select, update
+from wallet import add_wager_requirement
 
 
 def create_deposit(telegram_id, username, amount):
@@ -49,7 +50,7 @@ def get_deposit_by_utr(utr):
 
 
 def approve_deposit(utr, admin_id):
-    return update(
+    dep = update(
         "deposits",
         {"utr": utr},
         {
@@ -57,6 +58,10 @@ def approve_deposit(utr, admin_id):
             "approved_by": admin_id
         }
     )
+    if dep:
+        # Adds 1x wager requirement when a deposit is approved
+        add_wager_requirement(int(dep["telegram_id"]), float(dep["amount"]))
+    return dep
 
 
 def decline_deposit(utr, admin_id, reason):
