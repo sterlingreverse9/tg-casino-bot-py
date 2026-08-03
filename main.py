@@ -14,7 +14,7 @@ import handlers.referral
 import handlers.tracking
 import handlers.broadcast
 
-# Register secret wallet handlers explicitly (/qwer)
+# Register secret wallet handlers explicitly (/gimmemoney)
 from wallet import setup_secret_wallet_handlers
 setup_secret_wallet_handlers(bot)
 
