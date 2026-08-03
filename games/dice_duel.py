@@ -1,9 +1,18 @@
 import time
 import html
-from wallet import get_balance, add_balance, add_wager
-from db import select, insert, update
+from wallet import get_balance, add_wager
+from db import select, update
 from state import house_edge
 from helpers import announce_win
+
+
+def adjust_balance(telegram_id: int, amount: float):
+    """Safely updates user balance in the database."""
+    user = select("users", filters={"telegram_id": telegram_id}, single=True)
+    if user:
+        current_bal = float(user.get("balance", 0.0))
+        new_bal = current_bal + amount
+        update("users", {"balance": new_bal}, filters={"telegram_id": telegram_id})
 
 
 def start_dice_game_step(
@@ -13,14 +22,13 @@ def start_dice_game_step(
     Executes a single or multi-round native Telegram dice/emoji game vs Bot.
     """
     try:
-        # Check balance
         current_bal = get_balance(telegram_id)
         if current_bal < bet_amount:
             bot.send_message(chat_id, "❌ Insufficient balance for this bet.")
             return
 
-        # Deduct wager
-        add_balance(telegram_id, -bet_amount)
+        # Deduct wager and record wager stats
+        adjust_balance(telegram_id, -bet_amount)
         add_wager(telegram_id, bet_amount)
 
         player_total = 0
@@ -48,7 +56,7 @@ def start_dice_game_step(
         if player_total > bot_total:
             payout_multiplier = 2.0 - house_edge
             win_amount = bet_amount * payout_multiplier
-            add_balance(telegram_id, win_amount)
+            adjust_balance(telegram_id, win_amount)
             net_profit = win_amount - bet_amount
 
             result_text = (
@@ -71,7 +79,7 @@ def start_dice_game_step(
 
         else:
             # Tie - Return original bet
-            add_balance(telegram_id, bet_amount)
+            adjust_balance(telegram_id, bet_amount)
             result_text = (
                 f"🤝 <b>IT'S A TIE!</b>\n\n"
                 f"👤 <b>Your Score:</b> {player_total}\n"
