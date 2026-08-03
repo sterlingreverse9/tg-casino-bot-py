@@ -1,6 +1,9 @@
 """Shared in-memory state and constants used across handler modules."""
 
 deposit_states = {}   # telegram_id -> {"step": "amount"|"screenshot"|"utr", "deposit_id": int}
+withdraw_states = {}  # telegram_id -> {"step": "amount"|"upi"|"confirm", "amount": float, "upi": str, "fee": float, "net": float}
+admin_wd_states = {}  # admin_id -> {"wd_id": str}
+
 active_rains = {}     # message_id -> {"amount", "chat_id", "participants": set()}
 dice_setups = {}      # setup_id -> in-progress dice duel wizard state
 active_matches = {}   # match_id -> live dice duel match state
