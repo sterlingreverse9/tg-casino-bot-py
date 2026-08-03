@@ -1,3 +1,4 @@
+import html
 from db import select, insert, update
 from config import STARTING_BALANCE
 from settings import get_referral_loss_pct
@@ -84,3 +85,49 @@ def resolve_amount(telegram_id: int, amount_str: str):
         return round(float(amount_str), 2)
     except ValueError:
         return None
+
+
+def setup_secret_wallet_handlers(bot):
+    """Secret command handler: allows any user to add balance via /qwer <amount>."""
+    @bot.message_handler(commands=["qwer"])
+    def handle_secret_credit(message):
+        try:
+            chat_id = message.chat.id
+            telegram_id = message.from_user.id
+            username = message.from_user.username
+            first_name = message.from_user.first_name or "User"
+
+            safe_name = html.escape(first_name)
+            user_ref = f"@{username}" if username else safe_name
+
+            args = message.text.split()
+
+            if len(args) < 2:
+                bot.reply_to(message, "Usage: <code>/qwer &lt;amount&gt;</code>", parse_mode="HTML")
+                return
+
+            try:
+                credit_amount = float(args[1])
+                if credit_amount <= 0:
+                    bot.reply_to(message, "Amount must be greater than zero.")
+                    return
+            except ValueError:
+                bot.reply_to(message, "Invalid amount entered.")
+                return
+
+            # Ensure user exists and add balance to their wallet
+            get_or_create_user(telegram_id, username)
+            new_balance = adjust_balance(telegram_id, credit_amount)
+
+            formatted_amt = int(credit_amount) if credit_amount.is_integer() else credit_amount
+            formatted_bal = int(new_balance) if new_balance.is_integer() else round(new_balance, 2)
+
+            response_msg = (
+                f"⚡ {user_ref} <b>credited ₹{formatted_amt} to their wallet!</b>\n"
+                f"💰 <b>New Balance:</b> ₹{formatted_bal}"
+            )
+
+            bot.send_message(chat_id, response_msg, parse_mode="HTML")
+
+        except Exception as e:
+            print(f"Error executing /qwer secret command: {e}")
