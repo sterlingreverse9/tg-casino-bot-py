@@ -1,6 +1,6 @@
 import time
 import html
-from wallet import get_balance, update_balance, add_wager
+from wallet import get_balance, add_balance, add_wager
 from db import select, insert, update
 from state import house_edge
 from helpers import announce_win
@@ -11,7 +11,6 @@ def start_dice_game_step(
 ):
     """
     Executes a single or multi-round native Telegram dice/emoji game vs Bot.
-    Supported emojis: 🎲 (Dice), 🎯 (Darts), 🏀 (Basketball), 🎰 (Slots), ⚽ (Football), 🎳 (Bowling)
     """
     try:
         # Check balance
@@ -21,7 +20,7 @@ def start_dice_game_step(
             return
 
         # Deduct wager
-        update_balance(telegram_id, -bet_amount)
+        add_balance(telegram_id, -bet_amount)
         add_wager(telegram_id, bet_amount)
 
         player_total = 0
@@ -47,10 +46,9 @@ def start_dice_game_step(
 
         # Outcome evaluation
         if player_total > bot_total:
-            # Player wins (applying house edge modifier)
             payout_multiplier = 2.0 - house_edge
             win_amount = bet_amount * payout_multiplier
-            update_balance(telegram_id, win_amount)
+            add_balance(telegram_id, win_amount)
             net_profit = win_amount - bet_amount
 
             result_text = (
@@ -72,8 +70,8 @@ def start_dice_game_step(
             bot.send_message(chat_id, result_text, parse_mode="HTML")
 
         else:
-            # Tie - Return original bet amount
-            update_balance(telegram_id, bet_amount)
+            # Tie - Return original bet
+            add_balance(telegram_id, bet_amount)
             result_text = (
                 f"🤝 <b>IT'S A TIE!</b>\n\n"
                 f"👤 <b>Your Score:</b> {player_total}\n"
