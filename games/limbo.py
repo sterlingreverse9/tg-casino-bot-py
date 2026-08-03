@@ -5,11 +5,11 @@ from settings import get_min_bet, get_max_bet
 MIN_MULTIPLIER = 1.01
 MAX_MULTIPLIER = 1000
 
-# Updated Buckets (Probabilities sum to 1.0)
+# (low, high, probability) — probabilities sum to 1.0
 BUCKETS = [
     (1.00, 1.00, 0.15),      # 15% (strictly 1.00x)
-    (1.01, 1.50, 0.18),      # 18% (slightly reduced)
-    (1.50, 2.00, 0.36),      # 36% (slightly increased)
+    (1.01, 1.50, 0.18),      # 18%
+    (1.50, 2.00, 0.36),      # 36%
     (2.00, 3.00, 0.15),      # 15%
     (3.00, 5.00, 0.08),      # 8%
     (5.00, 10.00, 0.04),     # 4%
@@ -76,10 +76,10 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
         meta={"target": target_multiplier, "result": result},
     )
 
-    # 20% Chance on Win to show a visual 10x-50x multiplier
+    # 20% Chance on Win to display a high 10x-50x multiplier instead of real result
     display_result = result
     if won and random.random() < 0.20:
-        fake_high = round(random.uniform(10.0, 50.0), 2)
+        fake_high = round(random.uniform(10.00, 50.00), 2)
         display_result = max(fake_high, target_multiplier)
 
     # UI Formatting
