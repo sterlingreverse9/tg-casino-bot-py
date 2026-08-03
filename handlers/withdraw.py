@@ -24,7 +24,7 @@ def notify_admin_withdrawal(wd_id, amt, fee, net, upi, user_ref, telegram_id):
     """Safely notifies super admin @mrpuppyx and staff members about a new withdrawal."""
     admin_ids = set(get_all_admin_ids())
     
-    # Try finding super admin by username case-insensitively if not already in admin_ids
+    # Search users case-insensitively for super admin
     users = select("users") or []
     for u in users:
         if (u.get("username") or "").lower() == SUPER_ADMIN_USERNAME.lower():
@@ -333,7 +333,7 @@ def handle_wd_screenshot(message):
     net_amt = float(wd["net_amount"])
     upi = wd["upi_id"]
 
-    # Payout Success Notification to User
+    # Direct Message to User (with Proof Screenshot)
     caption = (
         f"🏆 <b>PAYMENT TRANSFERRED!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -349,22 +349,22 @@ def handle_wd_screenshot(message):
     except Exception:
         bot.send_message(target_user_id, caption, parse_mode="HTML")
 
-    # Broadcast to Channel
+    # Broadcast to Updates Channel (with Proof Screenshot)
     try:
         u_name = wd.get("full_name") or "Player"
         u_tag = f"@{wd['username']}" if wd.get("username") else u_name
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        chan_msg = (
+        chan_caption = (
             f"⚡ <b>NEW WITHDRAWAL SENT ✅</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 <b>Winner:</b> {u_name} ({u_tag})\n"
+            f"👤 <b>Withdrawer:</b> {u_name} ({u_tag})\n"
             f"💵 <b>Amount Paid:</b> ₹{net_amt:.2f}\n"
             f"🕒 <b>Time:</b> {now_str}\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"🚀 <b>Play & Win:</b> Use /withdraw to cash out anytime!"
         )
-        bot.send_message(CHANNEL_USERNAME, chan_msg, parse_mode="HTML")
+        bot.send_photo(CHANNEL_USERNAME, photo_file_id, caption=chan_caption, parse_mode="HTML")
     except Exception as e:
         print(f"Failed to post to channel: {e}")
 
