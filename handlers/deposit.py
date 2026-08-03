@@ -1,6 +1,7 @@
+import html
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot_instance import bot
-from db import select
+from db import select, has_permission, get_all_permitted_users
 from config import CASINO_NAME
 from wallet import adjust_balance
 from game_status import is_game_enabled, set_game_enabled
@@ -14,9 +15,9 @@ from deposit import (
 )
 from referral import apply_deposit_reward
 
-WARNING = (
-    f"‎ "
-)
+SUPER_ADMIN_USERNAME = "mrpuppyx"
+
+WARNING = f"‎ "
 
 FAKE_QR_BLOCK_TEMPLATE = (
     "┏━━━━━━━━━━━━━━━━┓\n"
@@ -28,9 +29,41 @@ FAKE_QR_BLOCK_TEMPLATE = (
 )
 
 
+def notify_super_admin(action_user, deposit_user_id, utr, amount, status, reason=None):
+    """Notifies @mrpuppyx whenever a staff member approves or declines a deposit."""
+    try:
+        user = select("users", filters={"username": SUPER_ADMIN_USERNAME}, single=True)
+        if not user:
+            return
+
+        super_admin_id = int(user["telegram_id"])
+        staff_ref = f"@{action_user.username}" if action_user.username else action_user.id
+        
+        status_emoji = "✅" if status == "approved" else "❌"
+        msg = (
+            f"🔔 <b>Deposit Action Notification</b>\n\n"
+            f"👤 <b>Staff:</b> {staff_ref}\n"
+            f"📌 <b>Action:</b> {status.upper()} {status_emoji}\n"
+            f"💵 <b>Amount:</b> ₹{amount}\n"
+            f"💳 <b>UTR:</b> <code>{utr}</code>\n"
+            f"🎯 <b>Target User ID:</b> <code>{deposit_user_id}</code>"
+        )
+        if reason:
+            msg += f"\n📝 <b>Reason:</b> {reason}"
+
+        bot.send_message(super_admin_id, msg, parse_mode="HTML")
+    except Exception as e:
+        print(f"Failed to notify super admin: {e}")
+
+
+def is_staff_user(telegram_id: int) -> bool:
+    """Checks if a user is an admin or has deposit access permissions."""
+    return is_admin(telegram_id) or has_permission(telegram_id, "deposit")
+
+
 @bot.message_handler(commands=["changeupi"])
 def cmd_changeupi(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "deposit"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     parts = message.text.split()
@@ -132,7 +165,6 @@ def handle_deposit_paid(call):
 def handle_deposit_screenshot(message):
     state = deposit_states[message.from_user.id]
     save_screenshot(state["deposit_id"], message.photo[-1].file_id)
-    utr = None
     dep = get_deposit_by_utr_from_state(state)
     deposit_states.pop(message.from_user.id, None)
     bot.reply_to(
@@ -150,9 +182,13 @@ def get_deposit_by_utr_from_state(state):
 
 @bot.message_handler(commands=["approve"])
 def cmd_approve_deposit(message):
-    if not is_admin(message.from_user.id):
+    caller_id = message.from_user.id
+    caller_username = (message.from_user.username or "").lower()
+
+    if not is_admin(caller_id) and not has_permission(caller_id, "deposit"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
+
     parts = message.text.split()
     if len(parts) != 2:
         bot.reply_to(message, "Usage: /approve <utr>")
@@ -162,21 +198,42 @@ def cmd_approve_deposit(message):
     if dep is None or dep["status"] != "pending":
         bot.reply_to(message, "No pending deposit found with that UTR.")
         return
-    approve_deposit(utr, message.from_user.id)
-    new_balance = adjust_balance(int(dep["telegram_id"]), float(dep["amount"]))
-    apply_deposit_reward(int(dep["telegram_id"]), float(dep["amount"]))
-    bot.reply_to(message, f"✅ Approved. Credited {dep['amount']} rupess to {dep['telegram_id']}.")
+
+    dep_user_id = int(dep["telegram_id"])
+
+    # Strict Staff Rules: Cannot approve self or another staff member unless @mrpuppyx
+    if caller_username != SUPER_ADMIN_USERNAME.lower():
+        if caller_id == dep_user_id:
+            bot.reply_to(message, "❌ You cannot approve your own deposit request.")
+            return
+        if is_staff_user(dep_user_id):
+            bot.reply_to(message, "❌ You cannot approve another staff member's deposit request. Only @mrpuppyx can.")
+            return
+
+    approve_deposit(utr, caller_id)
+    new_balance = adjust_balance(dep_user_id, float(dep["amount"]))
+    apply_deposit_reward(dep_user_id, float(dep["amount"]))
+
+    bot.reply_to(message, f"✅ Approved. Credited {dep['amount']} rupees to {dep_user_id}.")
+
+    # Direct Notification to @mrpuppyx
+    notify_super_admin(message.from_user, dep_user_id, utr, dep["amount"], "approved")
+
     try:
-        bot.send_message(int(dep["telegram_id"]), f"✅ Your deposit request was approved!\n+{dep['amount']} rupess\nBalance: {new_balance}")
+        bot.send_message(dep_user_id, f"✅ Your deposit request was approved!\n+{dep['amount']} rupees\nBalance: {new_balance}")
     except Exception:
         pass
 
 
 @bot.message_handler(commands=["decline"])
 def cmd_decline_deposit(message):
-    if not is_admin(message.from_user.id):
+    caller_id = message.from_user.id
+    caller_username = (message.from_user.username or "").lower()
+
+    if not is_admin(caller_id) and not has_permission(caller_id, "deposit"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
+
     parts = message.text.split(maxsplit=2)
     if len(parts) < 2:
         bot.reply_to(message, "Usage: /decline <utr> <reason>")
@@ -187,17 +244,33 @@ def cmd_decline_deposit(message):
     if dep is None or dep["status"] != "pending":
         bot.reply_to(message, "No pending deposit found with that UTR.")
         return
-    decline_deposit(utr, message.from_user.id, reason)
+
+    dep_user_id = int(dep["telegram_id"])
+
+    # Strict Staff Rules: Cannot decline self or another staff member unless @mrpuppyx
+    if caller_username != SUPER_ADMIN_USERNAME.lower():
+        if caller_id == dep_user_id:
+            bot.reply_to(message, "❌ You cannot decline your own deposit request.")
+            return
+        if is_staff_user(dep_user_id):
+            bot.reply_to(message, "❌ You cannot decline another staff member's deposit request. Only @mrpuppyx can.")
+            return
+
+    decline_deposit(utr, caller_id, reason)
     bot.reply_to(message, f"❌ Declined deposit {utr}.")
+
+    # Direct Notification to @mrpuppyx
+    notify_super_admin(message.from_user, dep_user_id, utr, dep["amount"], "declined", reason)
+
     try:
-        bot.send_message(int(dep["telegram_id"]), f"❌ Your deposit request was declined.\nReason: {reason}")
+        bot.send_message(dep_user_id, f"❌ Your deposit request was declined.\nReason: {reason}")
     except Exception:
         pass
 
 
 @bot.message_handler(commands=["pendingdepo"])
 def cmd_pending_deposits(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "deposit"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     deps = pending_deposits()
@@ -214,7 +287,7 @@ def cmd_pending_deposits(message):
 
 @bot.message_handler(commands=["deposithistory"])
 def cmd_deposit_history(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "deposit"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     deps = deposit_history(limit=20)
@@ -231,7 +304,7 @@ def cmd_deposit_history(message):
 
 @bot.message_handler(commands=["stopdeposit"])
 def cmd_stopdeposit(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "deposit"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     set_game_enabled("deposit", False)
@@ -240,7 +313,7 @@ def cmd_stopdeposit(message):
 
 @bot.message_handler(commands=["startdeposit"])
 def cmd_startdeposit(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "deposit"):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
     set_game_enabled("deposit", True)
