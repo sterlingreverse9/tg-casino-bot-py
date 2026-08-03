@@ -5,11 +5,11 @@ from settings import get_min_bet, get_max_bet
 MIN_MULTIPLIER = 1.01
 MAX_MULTIPLIER = 1000
 
-# (low, high, probability) — probabilities should sum to 1.0
+# Updated Buckets (Probabilities sum to 1.0)
 BUCKETS = [
-    (0.98, 1.00, 0.18),      # 18%
-    (1.01, 1.50, 0.20),      # 20%
-    (1.50, 2.00, 0.31),      # 31%
+    (1.00, 1.00, 0.15),      # 15% (strictly 1.00x)
+    (1.01, 1.50, 0.18),      # 18% (slightly reduced)
+    (1.50, 2.00, 0.36),      # 36% (slightly increased)
     (2.00, 3.00, 0.15),      # 15%
     (3.00, 5.00, 0.08),      # 8%
     (5.00, 10.00, 0.04),     # 4%
@@ -36,6 +36,8 @@ def roll_result() -> float:
     for low, high, prob in BUCKETS:
         cumulative += prob
         if r <= cumulative:
+            if low == high:
+                return float(low)
             return round(random.uniform(low, high), 2)
     low, high, _ = BUCKETS[-1]
     return round(random.uniform(low, high), 2)
@@ -74,13 +76,19 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
         meta={"target": target_multiplier, "result": result},
     )
 
+    # 20% Chance on Win to show a visual 10x-50x multiplier
+    display_result = result
+    if won and random.random() < 0.20:
+        fake_high = round(random.uniform(10.0, 50.0), 2)
+        display_result = max(fake_high, target_multiplier)
+
     # UI Formatting
     header_arrow = "⬆️" if won else "⬇️"
     mult_arrow = "⬆️" if won else "⬇️"
 
     message = (
         f"{header_arrow} Limbo\n\n"
-        f"₹{bet_amount:.2f} → ₹{payout:.2f} ({result:.2f}×)\n\n"
+        f"₹{bet_amount:.2f} → ₹{payout:.2f} ({display_result:.2f}×)\n\n"
         f"Multiplier: {target_multiplier:.2f}× {mult_arrow}"
     )
 
