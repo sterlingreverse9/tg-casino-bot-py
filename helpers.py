@@ -1,8 +1,27 @@
+import html
 from bot_instance import bot
 from db import select
 from wallet import get_or_create_user
 from state import PROMO_TAG
 from deposit import get_deposit_by_utr
+
+WINS_CHANNEL = "@thecassinowins"
+PLAY_GROUP_URL = "https://t.me/thecassinogroup"
+
+# Expanded to cover all native Telegram animated games
+GAME_EMOJIS = {
+    "Coinflip": "🪙",
+    "Dice Roll": "🎲",
+    "Darts": "🎯",
+    "Basketball": "🏀",
+    "Slots": "🎰",
+    "Football": "⚽",
+    "Bowling": "🎳",
+    "Limbo": "🚀",
+    "Tower": "🏗️",
+    "Dice Duel": "⚔️",
+    "Predict Number": "🔮",
+}
 
 
 def has_promo_tag(user):
@@ -34,7 +53,7 @@ def get_target_user(message, target):
 
 def get_all_admin_ids():
     """Fetch every admin's telegram_id. Filters client-side to avoid DB boolean-serialization bugs."""
-    users = select("users")
+    users = select("users") or []
     return [int(u["telegram_id"]) for u in users if u.get("is_admin")]
 
 
@@ -44,27 +63,16 @@ def format_display_name(first_name, username):
     return first_name or "Player"
 
 
-WINS_CHANNEL = "@thecassinowins"
-PLAY_GROUP_URL = "https://t.me/thecassinogroup"
-
-GAME_EMOJIS = {
-    "Coinflip": "🪙",
-    "Dice Roll": "🎲",
-    "Limbo": "🚀",
-    "Tower": "🏗️",
-    "Dice Duel": "⚔️",
-    "Predict Number": "🔮",
-}
-
-
 def announce_win(name: str, amount: float, game_label: str):
     from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
     emoji = GAME_EMOJIS.get(game_label, "🎰")
-    text = f"{name} just won {amount} in the game {game_label} {emoji}"
+    safe_name = html.escape(name)
+    text = f"🎉 <b>{safe_name}</b> just won <b>₹{amount:.2f}</b> in <b>{game_label}</b> {emoji}!"
+    
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("▶️ Play Here", url=PLAY_GROUP_URL))
     try:
-        bot.send_message(WINS_CHANNEL, text, reply_markup=markup)
+        bot.send_message(WINS_CHANNEL, text, reply_markup=markup, parse_mode="HTML")
         print("[DEBUG] Win announcement sent")
     except Exception as e:
         print(f"Failed to post win announcement: {e}")
@@ -80,18 +88,22 @@ def is_member_of(channel: str, telegram_id: int) -> bool:
 
 def notify_admins_of_deposit(telegram_id, username, utr):
     dep = get_deposit_by_utr(utr)
+    if not dep:
+        return
     admin_ids = get_all_admin_ids()
+    
     text = (
-        f"🆕 Deposit request\n"
-        f"User: {('@' + username) if username else telegram_id}\n"
-        f"Amount requested: {dep['amount']} rupess\n"
-        f"UTR: {utr}\n\n"
-        f"/approve {utr}\n/decline {utr} <reason>"
+        f"🆕 <b>Deposit Request Received</b>\n\n"
+        f"👤 <b>User:</b> {('@' + username) if username else telegram_id}\n"
+        f"💵 <b>Amount Requested:</b> ₹{dep['amount']}\n"
+        f"💳 <b>UTR:</b> <code>{utr}</code>\n\n"
+        f"✅ <code>/approve {utr}</code>\n"
+        f"❌ <code>/decline {utr} &lt;reason&gt;</code>"
     )
     if not admin_ids:
         print("WARNING: no admins found — nobody will be notified. Check is_admin is set to true for someone.")
     for admin_id in admin_ids:
         try:
-            bot.send_message(admin_id, text)
+            bot.send_message(admin_id, text, parse_mode="HTML")
         except Exception as e:
             print(f"Failed to DM admin {admin_id}: {e}")
