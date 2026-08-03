@@ -29,8 +29,7 @@ FAKE_QR_BLOCK_TEMPLATE = (
 
 
 def notify_admins_of_deposit(user_id, username, utr, amount, photo_file_id=None):
-    """Sends the '🆕 Deposit request' ping to all admins and permitted deposit managers."""
-    # Combine system admins + users granted 'deposit' permission via /giveaccess
+    """Sends deposit ping with screenshot photo to all staff/admins."""
     admin_ids = set(get_all_admin_ids())
     permitted_staff = set(get_all_permitted_users("deposit"))
     all_targets = admin_ids.union(permitted_staff)
@@ -49,11 +48,29 @@ def notify_admins_of_deposit(user_id, username, utr, amount, photo_file_id=None)
     for target_id in all_targets:
         try:
             if photo_file_id:
-                bot.send_photo(target_id, photo_file_id, caption=caption, parse_mode="HTML")
+                bot.send_photo(
+                    chat_id=target_id,
+                    photo=photo_file_id,
+                    caption=caption,
+                    parse_mode="HTML"
+                )
             else:
-                bot.send_message(target_id, caption, parse_mode="HTML")
+                bot.send_message(
+                    chat_id=target_id,
+                    text=caption,
+                    parse_mode="HTML"
+                )
         except Exception as e:
-            print(f"Failed to ping admin {target_id}: {e}")
+            print(f"[Deposit Notification Error] Failed to send photo to {target_id}: {e}")
+            # Fallback to text message if send_photo throws an API exception
+            try:
+                bot.send_message(
+                    chat_id=target_id,
+                    text=caption + "\n\n⚠️ <i>(Screenshot failed to attach)</i>",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
 
 
 def notify_super_admin(action_user, deposit_user_id, utr, amount, status, reason=None):
@@ -190,7 +207,7 @@ def handle_deposit_utr(message):
 
 @bot.message_handler(
     func=lambda m: m.from_user.id in deposit_states and deposit_states[m.from_user.id]["step"] == "screenshot",
-    content_types=["photo"],
+    content_types=["photo", "document"],
 )
 def handle_deposit_screenshot(message):
     state = deposit_states.get(message.from_user.id)
@@ -198,10 +215,22 @@ def handle_deposit_screenshot(message):
         bot.reply_to(message, "Session expired — please run /deposit again.")
         return
 
-    photo_file_id = message.photo[-1].file_id
-    save_screenshot(state["deposit_id"], photo_file_id)
+    photo_file_id = None
 
-    # Trigger admin pings
+    if message.photo:
+        photo_file_id = message.photo[-1].file_id
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+        photo_file_id = message.document.file_id
+    else:
+        bot.reply_to(message, "Please send a valid image/screenshot.")
+        return
+
+    try:
+        save_screenshot(state["deposit_id"], photo_file_id)
+    except Exception as e:
+        print(f"[DB Error] Failed to save screenshot ID: {e}")
+
+    # Notify admins with screenshot
     notify_admins_of_deposit(
         user_id=message.from_user.id,
         username=message.from_user.username,
