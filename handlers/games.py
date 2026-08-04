@@ -6,7 +6,7 @@ from games.coinflip import play_coinflip
 from games.dice_roll import play_dice_roll
 from games.limbo import play_limbo, parse_multiplier
 from games.predict import play_predict_number
-from helpers import ensure_user, format_display_name
+from helpers import ensure_user, format_display_name, is_user_frozen
 
 
 def name_of(user):
@@ -44,6 +44,9 @@ def send_games_list(message):
 @bot.message_handler(commands=["cf"])
 def cmd_cf(message):
     ensure_user(message)
+    if is_user_frozen(message.from_user.id):
+        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+        return
     if not is_game_enabled("cf"):
         bot.reply_to(message, "Coinflip is currently disabled.")
         return
@@ -61,6 +64,9 @@ def cmd_cf(message):
 @bot.message_handler(commands=["limbo"])
 def cmd_limbo(message):
     ensure_user(message)
+    if is_user_frozen(message.from_user.id):
+        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+        return
     if not is_game_enabled("limbo"):
         bot.reply_to(message, "Limbo is currently disabled.")
         return
@@ -99,6 +105,9 @@ def build_dr_keyboard(telegram_id: int, amount_str: str):
 @bot.message_handler(commands=["dr", "diceroll"])
 def cmd_dr(message):
     ensure_user(message)
+    if is_user_frozen(message.from_user.id):
+        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+        return
     if not is_game_enabled("dr"):
         bot.reply_to(message, "Dice Roll is currently disabled.")
         return
@@ -128,6 +137,9 @@ def cmd_dr(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("dr:"))
 def handle_dr_callback(call):
+    if is_user_frozen(call.from_user.id):
+        bot.answer_callback_query(call.id, "❄️ Your account is currently frozen.", show_alert=True)
+        return
     if not is_game_enabled("dr"):
         bot.answer_callback_query(call.id, "Dice Roll is currently disabled.")
         return
@@ -147,6 +159,9 @@ def handle_dr_callback(call):
 @bot.message_handler(commands=["pn", "predictno", "predictnumber"])
 def cmd_predict_number(message):
     ensure_user(message)
+    if is_user_frozen(message.from_user.id):
+        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+        return
     if not is_game_enabled("pn"):
         bot.reply_to(message, "Predict Number is currently disabled.")
         return
