@@ -13,6 +13,34 @@ def name_of(user):
     return format_display_name(user.first_name, user.username)
 
 
+# --- Public Command: Games List & Commands Overview ---
+@bot.message_handler(commands=["game", "games"])
+def send_games_list(message):
+    games_text = (
+        "<b>🎰 Available Casino Games & Commands</b>\n"
+        "────────────────────────\n\n"
+        "<b>🪙 Coinflip</b>\n"
+        "• Command: <code>/cf &lt;amount|all|half&gt; &lt;heads|tails&gt;</code>\n"
+        "• Example: <code>/cf 50 heads</code>\n\n"
+        "<b>🎲 Dice Roll</b>\n"
+        "• Command: <code>/dr &lt;amount|all|half&gt; &lt;choice&gt;</code>\n"
+        "• Choices: <i>high, low, even, odd, 1-6</i> or type <code>/dr 50</code> for buttons.\n\n"
+        "<b>🚀 Limbo</b>\n"
+        "• Command: <code>/limbo &lt;amount|all|half&gt; &lt;multiplier&gt;</code>\n"
+        "• Example: <code>/limbo 40 2x</code> or <code>/limbo all 6</code>\n\n"
+        "<b>🎯 Predict Number</b>\n"
+        "• Command: <code>/pn &lt;amount|all|half&gt; &lt;1-100&gt;</code>\n"
+        "• Example: <code>/pn 20 77</code>\n\n"
+        "<b>⚔️ Dice Duel</b>\n"
+        "• Command: <code>/diceduel @username &lt;amount&gt;</code>\n\n"
+        "<b>🏰 Tower Game</b>\n"
+        "• Command: <code>/tower &lt;amount&gt;</code>\n\n"
+        "────────────────────────\n"
+        "<i>💡 Tip: Ensure you have sufficient balance in your wallet before placing bets!</i>"
+    )
+    bot.reply_to(message, games_text, parse_mode="HTML")
+
+
 @bot.message_handler(commands=["cf"])
 def cmd_cf(message):
     ensure_user(message)
