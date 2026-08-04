@@ -4,7 +4,7 @@ from db import insert, update, select, grant_permission, has_permission
 from wallet import get_or_create_user, adjust_balance, resolve_amount
 from settings import get_min_bet, set_min_bet, get_max_bet, set_max_bet, get_house_edge, set_house_edge
 from middleware.admin import is_admin
-from helpers import get_target_user, get_all_admin_ids
+from helpers import get_target_user, get_all_admin_ids, set_user_frozen
 
 SUPER_ADMIN_USERNAME = "mrpuppyx"
 
@@ -12,6 +12,54 @@ SUPER_ADMIN_USERNAME = "mrpuppyx"
 def is_super_admin(user):
     username = user.username or ""
     return username.lower() == SUPER_ADMIN_USERNAME.lower()
+
+
+@bot.message_handler(commands=["freeze", "unfreeze"])
+def handle_freeze_toggle(message):
+    sender_username = (message.from_user.username or "").lower()
+
+    # 1. Access restriction strictly to super admin or admins with 'freeze' permission
+    if not is_super_admin(message.from_user) and not (is_admin(message.from_user.id) or has_permission(message.from_user.id, "freeze")):
+        bot.reply_to(message, "❌ You don't have permission to use this command.")
+        return
+
+    command = message.text.split()[0].lower()
+    is_freezing = "freeze" in command and "unfreeze" not in command
+
+    target_user_id = None
+    target_name = None
+
+    # 2. Check if used via Reply
+    if message.reply_to_message:
+        target_user = message.reply_to_message.from_user
+        target_user_id = target_user.id
+        target_name = f"@{target_user.username}" if target_user.username else target_user.first_name
+
+    # 3. Check if used via Argument (/freeze @username or /freeze 123456)
+    else:
+        args = message.text.split()[1:]
+        if not args:
+            bot.reply_to(message, f"⚠️ Usage:\n• Reply to a user: <code>{command}</code>\n• Pass user or ID: <code>{command} @username</code>", parse_mode="HTML")
+            return
+        
+        target_user_id = get_target_user(message, args[0])
+        if not target_user_id:
+            bot.reply_to(message, "⚠️ User not found.")
+            return
+        target_name = args[0]
+
+    # 4. Toggle freeze status
+    get_or_create_user(target_user_id, None)
+    set_user_frozen(target_user_id, is_freezing)
+    
+    insert("admin_actions", {
+        "admin_id": message.from_user.id,
+        "action": "freeze" if is_freezing else "unfreeze",
+        "target_id": target_user_id
+    })
+
+    status_msg = "🔒 <b>FROZEN</b> (Games & Withdrawals blocked)" if is_freezing else "🔓 <b>UNFROZEN</b> (Access restored)"
+    bot.reply_to(message, f"User {target_name} ({target_user_id}) has been {status_msg}.", parse_mode="HTML")
 
 
 @bot.message_handler(commands=["giveaccess"])
@@ -242,6 +290,7 @@ def cmd_admin_commands(message):
     text = (
         "🛠️ Admin Commands\n\n"
         "Access Control: /giveaccess <cmd> <user>\n"
+        "User Restrictions: /freeze <user>, /unfreeze <user>\n"
         "Balance: /add /deduct /killbal /resetld /updatehb\n"
         "Access: /promote /demote\n"
         "Game economy: /minbet /maxbet /sethousedge\n"
