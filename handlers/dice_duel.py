@@ -11,7 +11,7 @@ EMOJI_GAME_CONFIG = {
     "bowl": {"emoji": "🎳", "label": "Bowling", "aliases": ["bowl", "bowling"]},
 }
 
-# Stores active pending rolls: { user_id: { "emoji": "⚽", "bet_amount": 10.0, "rounds": 1 } }
+# Stores active session: { user_id: { "emoji": "🏀", "bet_amount": 10.0, "rounds": 3, "current_round": 1, "player_total": 0, "bot_total": 0, ... } }
 PENDING_ROLLS = {}
 
 def setup_dice_handlers(bot):
@@ -49,7 +49,6 @@ def setup_dice_handlers(bot):
             first_name = message.from_user.first_name or "User"
 
             safe_name = html.escape(first_name)
-            # Tag user via @username or clickable HTML link
             user_mention = f"@{username}" if username else f'<a href="tg://user?id={telegram_id}">{safe_name}</a>'
 
             if len(args) == 1:
@@ -106,18 +105,22 @@ def setup_dice_handlers(bot):
                 bot.send_message(chat_id, f"⚠️ {user_mention}, maximum bet is ₹{round(max_bet, 2)}.", parse_mode="HTML")
                 return
 
-            # Register pending roll for this user
+            # Register session state
             PENDING_ROLLS[telegram_id] = {
                 "emoji": emoji,
                 "bet_amount": bet_amount,
                 "rounds": rounds,
+                "current_round": 1,
+                "player_total": 0,
+                "bot_total": 0,
                 "username": username,
                 "first_name": first_name,
             }
 
+            round_info = f" (Round 1 of {rounds})" if rounds > 1 else ""
             bot.send_message(
                 chat_id,
-                f"🎯 {user_mention}, send <b>{emoji}</b> now to make your roll!",
+                f"🎯 {user_mention}, send <b>{emoji}</b> now to make your roll!{round_info}",
                 parse_mode="HTML"
             )
 
@@ -129,29 +132,25 @@ def setup_dice_handlers(bot):
     def handle_user_dice_roll(message):
         telegram_id = message.from_user.id
         
-        # Check if user has an active bet registered
         if telegram_id not in PENDING_ROLLS:
             return
 
         game_data = PENDING_ROLLS[telegram_id]
 
-        # Verify if sent dice matches expected game emoji
         if message.dice.emoji != game_data["emoji"]:
             return
 
-        # Clear pending state once handled
-        del PENDING_ROLLS[telegram_id]
-
         from games.dice_duel import process_user_roll
 
-        process_user_roll(
+        # Process this round
+        is_finished = process_user_roll(
             bot=bot,
             chat_id=message.chat.id,
             telegram_id=telegram_id,
-            bet_amount=game_data["bet_amount"],
-            rounds=game_data["rounds"],
-            username=game_data["username"],
-            first_name=game_data["first_name"],
-            emoji=game_data["emoji"],
+            game_data=game_data,
             user_dice_val=message.dice.value
         )
+
+        # Clear state if game completed
+        if is_finished and telegram_id in PENDING_ROLLS:
+            del PENDING_ROLLS[telegram_id]
