@@ -5,7 +5,7 @@ from wallet import get_balance, adjust_balance, get_house_balance, resolve_amoun
 from game_status import is_game_enabled
 from settings import get_min_bet, get_max_bet
 from games.tower import DIFFICULTY_CONFIG, TOTAL_FLOORS, generate_floor, floor_multiplier
-from helpers import ensure_user, announce_win, format_display_name
+from helpers import ensure_user, announce_win, format_display_name, is_user_frozen
 from state import tower_setups, active_towers
 
 
@@ -34,6 +34,9 @@ def tower_floor_keyboard(telegram_id: int, chat_id: int, num_tiles: int, show_ca
 @bot.message_handler(commands=["tower"])
 def cmd_tower(message):
     ensure_user(message)
+    if is_user_frozen(message.from_user.id):
+        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+        return
     if not is_game_enabled("tower"):
         bot.reply_to(message, "Tower is currently disabled.")
         return
@@ -78,6 +81,10 @@ def start_tower(setup_id: str, difficulty: str):
         return
     telegram_id, chat_id, bet_amount = setup["telegram_id"], setup["chat_id"], setup["bet_amount"]
 
+    if is_user_frozen(telegram_id):
+        bot.send_message(chat_id, "❄️ Your account is currently frozen.")
+        return
+
     if bet_amount > get_balance(telegram_id):
         bot.send_message(chat_id, "Not enough balance anymore.")
         return
@@ -101,6 +108,9 @@ def start_tower(setup_id: str, difficulty: str):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("twrdiff:"))
 def handle_tower_difficulty(call):
+    if is_user_frozen(call.from_user.id):
+        bot.answer_callback_query(call.id, "❄️ Your account is currently frozen.", show_alert=True)
+        return
     _, setup_id, difficulty = call.data.split(":")
     setup = tower_setups.get(setup_id)
     if setup is None or call.from_user.id != setup["telegram_id"]:
@@ -124,6 +134,9 @@ def handle_tower_cancel(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("twr:"))
 def handle_tower_tile(call):
+    if is_user_frozen(call.from_user.id):
+        bot.answer_callback_query(call.id, "❄️ Your account is currently frozen.", show_alert=True)
+        return
     _, tid_str, cid_str, idx_str = call.data.split(":")
     telegram_id, chat_id, idx = int(tid_str), int(cid_str), int(idx_str)
 
@@ -184,6 +197,9 @@ def handle_tower_tile(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("twrcash:"))
 def handle_tower_cashout(call):
+    if is_user_frozen(call.from_user.id):
+        bot.answer_callback_query(call.id, "❄️ Your account is currently frozen.", show_alert=True)
+        return
     _, tid_str, cid_str = call.data.split(":")
     telegram_id, chat_id = int(tid_str), int(cid_str)
 
@@ -211,4 +227,3 @@ def handle_tower_cashout(call):
         f"✅ Won {payout} coins!\nBalance: {get_balance(telegram_id)}",
     )
     announce_win(format_display_name(call.from_user.first_name, call.from_user.username), payout, "Tower")
-
