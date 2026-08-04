@@ -97,4 +97,11 @@ def check_balance_cmd(message):
 
 
 print(f"{CASINO_NAME} bot running...")
-bot.infinity_polling()
+if __name__ == "__main__":
+    print(f"{CASINO_NAME} bot running...")
+    try:
+        # skip_pending=True ignores old messages sent while bot was offline
+        bot.infinity_polling(timeout=10, long_polling_timeout=5, skip_pending=True)
+    except Exception as e:
+        print(f"Bot crashed with error: {e}")
+
