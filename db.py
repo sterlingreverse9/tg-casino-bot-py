@@ -19,12 +19,16 @@ def select(table, filters=None, order=None, desc=False, limit=None, single=False
         params["order"] = f"{order}.{'desc' if desc else 'asc'}"
     if limit:
         params["limit"] = limit
-    resp = requests.get(f"{BASE}/{table}", headers=HEADERS, params=params)
-    resp.raise_for_status()
-    data = resp.json()
-    if single:
-        return data[0] if data else None
-    return data
+    try:
+        resp = requests.get(f"{BASE}/{table}", headers=HEADERS, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        if single:
+            return data[0] if data else None
+        return data
+    except Exception as e:
+        print(f"[Supabase Select Error on {table}]: {e}")
+        return None if single else []
 
 
 def insert(table, row):
@@ -42,6 +46,29 @@ def update(table, filters, values):
     resp.raise_for_status()
     data = resp.json()
     return data[0] if data else None
+
+
+# --- Group Tracking Helpers ---
+
+def register_group(chat_id: int, title: str):
+    """Automatically record or update group info in the database."""
+    try:
+        existing = select("groups", filters={"chat_id": chat_id}, single=True)
+        if not existing:
+            insert("groups", {"chat_id": chat_id, "title": title, "is_active": True})
+        else:
+            update("groups", {"chat_id": chat_id}, {"title": title, "is_active": True})
+    except Exception as e:
+        print(f"[Group Register Error]: {e}")
+
+
+def get_all_groups():
+    """Retrieve all recorded active groups."""
+    try:
+        groups = select("groups", filters={"is_active": True}) or []
+        return groups
+    except Exception:
+        return []
 
 
 # --- Permission System Helpers ---
@@ -62,7 +89,7 @@ def has_permission(telegram_id: int, permission: str) -> bool:
     user = select("users", filters={"telegram_id": telegram_id}, single=True)
     if user and user.get("is_admin"):
         return True
-    
+
     perm = select("user_permissions", filters={"telegram_id": telegram_id, "permission": permission.lower()}, single=True)
     return perm is not None
 
