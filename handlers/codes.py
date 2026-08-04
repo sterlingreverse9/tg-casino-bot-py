@@ -1,322 +1,153 @@
 import html
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from bot_instance import bot
-from wallet import get_balance, adjust_balance
-from helpers import ensure_user, is_user_frozen, format_display_name
-from codes import (
-    CODE_CREATION_STATES,
-    get_code_data,
-    create_promo_code,
-    record_claim,
-)
+from telebot.types import Message
+from db import select, insert, update
+from wallet import adjust_balance, record_bet
 
-SUPER_ADMIN_USERNAME = "mrpuppyx"
-CODE_FEE_PERCENT = 0.025  # 2.5%
+# --- Code Creation & Claiming Handlers ---
 
+def setup_code_handlers(bot):
 
-@bot.message_handler(commands=["makecode"])
-def cmd_makecode(message):
-    ensure_user(message)
-    telegram_id = message.from_user.id
+    @bot.message_handler(commands=["redeem", "claim", "code"])
+    def redeem_code_cmd(message: Message):
+        """Redeems a promotional code for balance rewards with strict max_claims enforcement."""
+        telegram_id = message.from_user.id
+        chat_id = message.chat.id
+        args = message.text.split()[1:]
 
-    if is_user_frozen(telegram_id):
-        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot create promo codes.")
-        return
-
-    # Check if command is used in a group / supergroup
-    if message.chat.type != "private":
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton(
-                "🎁 Create Code in DM",
-                url=f"https://t.me/{bot.get_me().username}?start=makecode",
-            )
-        )
-        bot.reply_to(
-            message,
-            "<b>🎁 Code Creation</b>\n\nPromo codes can only be configured in Direct Messages for privacy.",
-            reply_markup=markup,
-            parse_mode="HTML",
-        )
-        return
-
-    CODE_CREATION_STATES[telegram_id] = {"step": "name", "data": {}}
-
-    msg = (
-        "<b>🎁 CREATE A PROMO CODE</b>\n"
-        "────────────────────────\n"
-        "Please enter your desired <b>Code Name</b>.\n\n"
-        "<i>Rules:</i>\n"
-        "• At least 4 characters long\n"
-        "• No spaces or special characters\n"
-        "• Example: <code>Happy39</code>, <code>Everest32</code>"
-    )
-    bot.send_message(message.chat.id, msg, parse_mode="HTML")
-
-
-@bot.message_handler(
-    func=lambda m: m.from_user.id in CODE_CREATION_STATES
-    and CODE_CREATION_STATES[m.from_user.id]["step"] == "name",
-    content_types=["text"],
-)
-def handle_code_name_input(message):
-    telegram_id = message.from_user.id
-    if is_user_frozen(telegram_id):
-        CODE_CREATION_STATES.pop(telegram_id, None)
-        bot.reply_to(message, "❄️ Your account is currently frozen. Code creation cancelled.")
-        return
-
-    code_name = message.text.strip()
-
-    if len(code_name) < 4:
-        bot.reply_to(message, "⚠️ Code name must be at least 4 characters long. Try again:")
-        return
-
-    if not code_name.isalnum():
-        bot.reply_to(message, "⚠️ Code name cannot contain spaces or special characters. Try again:")
-        return
-
-    if get_code_data(code_name) is not None:
-        bot.reply_to(message, "⚠️ This code name is already taken. Please pick another name:")
-        return
-
-    state = CODE_CREATION_STATES[telegram_id]
-    state["data"]["code_name"] = code_name
-    state["step"] = "users"
-
-    bot.send_message(
-        message.chat.id,
-        f"✅ Code Name set to: <code>{html.escape(code_name)}</code>\n\n"
-        f"👇 Enter <b>max users</b> who can claim this code (e.g., 4, 10):",
-        parse_mode="HTML",
-    )
-
-
-@bot.message_handler(
-    func=lambda m: m.from_user.id in CODE_CREATION_STATES
-    and CODE_CREATION_STATES[m.from_user.id]["step"] == "users",
-    content_types=["text"],
-)
-def handle_code_users_input(message):
-    telegram_id = message.from_user.id
-    if is_user_frozen(telegram_id):
-        CODE_CREATION_STATES.pop(telegram_id, None)
-        bot.reply_to(message, "❄️ Your account is currently frozen. Code creation cancelled.")
-        return
-
-    try:
-        max_users = int(message.text.strip())
-        if max_users < 1:
-            raise ValueError
-    except ValueError:
-        bot.reply_to(message, "⚠️ Please enter a valid whole number of max users (at least 1):")
-        return
-
-    state = CODE_CREATION_STATES[telegram_id]
-    state["data"]["max_users"] = max_users
-    state["step"] = "amount"
-
-    bot.send_message(
-        message.chat.id,
-        f"👥 Max Users: <b>{max_users}</b>\n\n"
-        f"👇 Enter <b>amount per user</b> (Min: ₹10):",
-        parse_mode="HTML",
-    )
-
-
-@bot.message_handler(
-    func=lambda m: m.from_user.id in CODE_CREATION_STATES
-    and CODE_CREATION_STATES[m.from_user.id]["step"] == "amount",
-    content_types=["text"],
-)
-def handle_code_amount_input(message):
-    telegram_id = message.from_user.id
-    if is_user_frozen(telegram_id):
-        CODE_CREATION_STATES.pop(telegram_id, None)
-        bot.reply_to(message, "❄️ Your account is currently frozen. Code creation cancelled.")
-        return
-
-    try:
-        amt_per_user = float(message.text.strip())
-        if amt_per_user < 10:
-            bot.reply_to(message, "⚠️ Minimum amount per user is ₹10. Try again:")
+        if not args:
+            bot.reply_to(message, "⚠️ Usage: <code>/redeem &lt;code&gt;</code>", parse_mode="HTML")
             return
-    except ValueError:
-        bot.reply_to(message, "⚠️ Please enter a valid numeric amount:")
-        return
 
-    state = CODE_CREATION_STATES[telegram_id]
-    data = state["data"]
-    data["amount_per_user"] = amt_per_user
+        promo_code = args[0].strip().upper()
 
-    max_users = data["max_users"]
-    raw_total = max_users * amt_per_user
-    fee = round(raw_total * CODE_FEE_PERCENT, 2)
-    total_cost = round(raw_total + fee, 2)
+        # 1. Fetch promo code details from database
+        code_data = select("codes", filters={"code": promo_code}, single=True)
+        if not code_data:
+            bot.reply_to(message, "❌ Invalid or expired promo code.")
+            return
 
-    data["fee"] = fee
-    data["total_cost"] = total_cost
-    state["step"] = "confirm"
+        # Check active status
+        if not code_data.get("is_active", True):
+            bot.reply_to(message, "❌ This promo code is no longer active.")
+            return
 
-    user_bal = get_balance(telegram_id)
+        max_claims = code_data.get("max_claims", 1)
+        current_claims = code_data.get("claimed_count", 0)
+        reward_amount = float(code_data.get("reward_amount", 0.0))
 
-    markup = InlineKeyboardMarkup()
-    markup.add(
-        InlineKeyboardButton("I Confirm to Create ✅", callback_data="confirm_makecode"),
-        InlineKeyboardButton("❌ Cancel", callback_data="cancel_makecode"),
-    )
+        # 2. Enforce Strict Max Claims Check
+        if current_claims >= max_claims:
+            bot.reply_to(message, "❌ This promo code has reached its maximum claim limit!")
+            return
 
-    overview_msg = (
-        "📋 <b>PROMO CODE OVERVIEW</b>\n"
-        "────────────────────────\n"
-        f"🏷️ <b>Code:</b> <code>{html.escape(data['code_name'])}</code>\n"
-        f"👥 <b>Max Users:</b> {max_users}\n"
-        f"💵 <b>Amount Per User:</b> ₹{amt_per_user:.2f}\n"
-        f"💰 <b>Subtotal:</b> ₹{raw_total:.2f}\n"
-        f"📊 <b>Creation Fee (2.5%):</b> ₹{fee:.2f}\n"
-        f"💳 <b>Total Deducted:</b> ₹{total_cost:.2f}\n"
-        "────────────────────────\n"
-        f"💼 <b>Your Balance:</b> ₹{user_bal:.2f}\n\n"
-        "<i>Click below to finalize and activate this code.</i>"
-    )
-    bot.send_message(message.chat.id, overview_msg, parse_mode="HTML", reply_markup=markup)
+        # 3. Check if user already claimed this specific code
+        already_claimed = select("code_claims", filters={"code": promo_code, "user_id": telegram_id}, single=True)
+        if already_claimed:
+            bot.reply_to(message, "⚠️ You have already claimed this promo code!")
+            return
 
+        # 4. Atomic Execution: Record claim row FIRST to prevent race conditions
+        try:
+            # Record user claim history
+            claim_entry = insert("code_claims", {
+                "code": promo_code,
+                "user_id": telegram_id,
+                "reward": reward_amount
+            })
 
-@bot.callback_query_handler(func=lambda call: call.data in ("confirm_makecode", "cancel_makecode"))
-def handle_makecode_confirmation(call):
-    telegram_id = call.from_user.id
-    state = CODE_CREATION_STATES.get(telegram_id)
+            if not claim_entry:
+                bot.reply_to(message, "❌ Claim failed due to a concurrency conflict. Please try again.")
+                return
 
-    if not state or state.get("step") != "confirm":
-        bot.answer_callback_query(call.id, "Session expired.", show_alert=True)
-        return
+            # Atomically increment claim count
+            new_claim_count = current_claims + 1
+            update_data = {"claimed_count": new_claim_count}
 
-    if call.data == "cancel_makecode":
-        CODE_CREATION_STATES.pop(telegram_id, None)
-        bot.answer_callback_query(call.id, "Cancelled.")
-        bot.edit_message_text("❌ Code creation cancelled.", call.message.chat.id, call.message.message_id)
-        return
+            # Deactivate if max claims limit reached
+            if new_claim_count >= max_claims:
+                update_data["is_active"] = False
 
-    if is_user_frozen(telegram_id):
-        CODE_CREATION_STATES.pop(telegram_id, None)
-        bot.answer_callback_query(call.id, "❄️ Your account is currently frozen.", show_alert=True)
-        return
+            update("codes", filters={"code": promo_code}, values=update_data)
 
-    data = state["data"]
-    total_cost = data["total_cost"]
-    user_bal = get_balance(telegram_id)
+            # Credit user wallet
+            adjust_balance(telegram_id, reward_amount)
 
-    if user_bal < total_cost:
-        bot.answer_callback_query(call.id, "Insufficient balance!", show_alert=True)
-        bot.send_message(
-            call.message.chat.id,
-            f"❌ <b>Insufficient Balance!</b> You need ₹{total_cost:.2f} but only have ₹{user_bal:.2f}.",
-            parse_mode="HTML",
-        )
-        CODE_CREATION_STATES.pop(telegram_id, None)
-        return
+            # Record transaction log
+            record_bet(telegram_id, "promo_code", 0.0, reward_amount, "win")
 
-    bot.answer_callback_query(call.id)
+            user_name = html.escape(message.from_user.first_name or "User")
+            bot.reply_to(
+                message,
+                f"🎉 <b>Code Claimed Successfully!</b>\n\n"
+                f"👤 <b>User:</b> {user_name}\n"
+                f"🎁 <b>Reward:</b> ₹{reward_amount:.2f}\n"
+                f"📊 <b>Claims:</b> {new_claim_count}/{max_claims}",
+                parse_mode="HTML"
+            )
 
-    # Deduct balance & save code
-    adjust_balance(telegram_id, -total_cost)
-    code_rec = create_promo_code(
-        creator_id=telegram_id,
-        creator_username=call.from_user.username or "",
-        code_name=data["code_name"],
-        max_users=data["max_users"],
-        amount_per_user=data["amount_per_user"],
-        total_cost=total_cost,
-    )
-
-    CODE_CREATION_STATES.pop(telegram_id, None)
-
-    # Confirmation msg to user
-    success_msg = (
-        "CODE MADE 🎉\n"
-        f"<b>CODE :</b> <code>{html.escape(data['code_name'])}</code>\n"
-        f"<b>AMOUNT PER USER :</b> ₹{data['amount_per_user']:.2f}\n"
-        f"<b>MAX CLAIMABLE USERS :</b> {data['max_users']}\n\n"
-        f"use <code>/claim {data['code_name']}</code> to claim"
-    )
-    bot.edit_message_text(success_msg, call.message.chat.id, call.message.message_id, parse_mode="HTML")
-
-    # Notify Super Admin (@mrpuppyx)
-    try:
-        user_ref = f"@{call.from_user.username}" if call.from_user.username else html.escape(call.from_user.first_name)
-        admin_alert = (
-            f"🚨 <b>NEW PROMO CODE CREATED</b>\n"
-            f"👤 <b>Creator:</b> {user_ref} (<code>{telegram_id}</code>)\n"
-            f"🏷️ <b>Code:</b> <code>{data['code_name']}</code>\n"
-            f"💵 <b>Amount/User:</b> ₹{data['amount_per_user']:.2f}\n"
-            f"👥 <b>Max Users:</b> {data['max_users']}\n"
-            f"💰 <b>Total Deducted:</b> ₹{total_cost:.2f}"
-        )
-        # Import DB select locally to notify admin
-        from db import select
-        users = select("users") or []
-        for u in users:
-            if (u.get("username") or "").lower() == SUPER_ADMIN_USERNAME.lower():
-                bot.send_message(int(u["telegram_id"]), admin_alert, parse_mode="HTML")
-                break
-    except Exception as e:
-        print(f"[Code Admin Alert Error]: {e}")
+        except Exception as e:
+            print(f"[Promo Code Claim Error]: {e}")
+            bot.reply_to(message, "⚠️ An error occurred while processing your reward.")
 
 
-@bot.message_handler(commands=["claim"])
-def cmd_claim_code(message):
-    ensure_user(message)
-    telegram_id = message.from_user.id
+    @bot.message_handler(commands=["makecode", "createcode"])
+    def create_code_cmd(message: Message):
+        """Admin command to create new promo codes: /makecode CODE AMOUNT MAX_CLAIMS"""
+        telegram_id = message.from_user.id
+        
+        # Check Admin permission
+        user = select("users", filters={"telegram_id": telegram_id}, single=True)
+        if not user or not user.get("is_admin"):
+            bot.reply_to(message, "❌ Only administrators can create promo codes.")
+            return
 
-    if is_user_frozen(telegram_id):
-        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot claim promo codes.")
-        return
+        args = message.text.split()[1:]
+        if len(args) < 3:
+            bot.reply_to(
+                message, 
+                "⚠️ Usage: <code>/makecode &lt;CODE&gt; &lt;AMOUNT&gt; &lt;MAX_CLAIMS&gt;</code>\n"
+                "Example: <code>/makecode BONUS100 50 5</code>", 
+                parse_mode="HTML"
+            )
+            return
 
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.reply_to(message, "Usage: <code>/claim &lt;code&gt;</code>", parse_mode="HTML")
-        return
+        promo_code = args[0].strip().upper()
+        
+        try:
+            reward_amount = float(args[1])
+            max_claims = int(args[2])
+        except ValueError:
+            bot.reply_to(message, "❌ Amount and Max Claims must be valid numbers.")
+            return
 
-    input_code = parts[1].strip()
-    code_data = get_code_data(input_code)
+        if reward_amount <= 0 or max_claims <= 0:
+            bot.reply_to(message, "⚠️ Amount and Max Claims must be greater than 0.")
+            return
 
-    if not code_data:
-        bot.reply_to(message, "❌ Invalid promo code!")
-        return
+        # Check existing code
+        existing = select("codes", filters={"code": promo_code}, single=True)
+        if existing:
+            bot.reply_to(message, "⚠️ A promo code with this name already exists!")
+            return
 
-    claimed_list = code_data.get("claimed_by", [])
-    max_users = int(code_data["max_users"])
+        # Create code in DB
+        res = insert("codes", {
+            "code": promo_code,
+            "reward_amount": reward_amount,
+            "max_claims": max_claims,
+            "claimed_count": 0,
+            "is_active": True,
+            "created_by": telegram_id
+        })
 
-    # 1. Check if limit hit
-    if len(claimed_list) >= max_users:
-        bot.reply_to(message, "Code is claimed by max users 🎉")
-        return
-
-    # 2. Check if already claimed by user
-    if telegram_id in claimed_list:
-        bot.reply_to(message, "⚠️ You have already claimed this code!")
-        return
-
-    # Grant balance & register claim
-    amt = float(code_data["amount_per_user"])
-    adjust_balance(telegram_id, amt)
-    record_claim(code_data["code_id"], telegram_id)
-
-    claimer_name = format_display_name(message.from_user.first_name, message.from_user.username)
-    bot.reply_to(
-        message,
-        f"🎉 <b>Code Claimed Successfully!</b>\n\n₹{amt:.2f} has been added to your balance.",
-        parse_mode="HTML",
-    )
-
-    # Notify Code Maker
-    try:
-        creator_id = int(code_data["creator_id"])
-        notify_msg = (
-            f"🎁 <b>Code Claim Notification!</b>\n\n"
-            f"User <b>{html.escape(claimer_name)}</b> just claimed your code "
-            f"<code>{html.escape(code_data['code_name'])}</code> (₹{amt:.2f})!"
-        )
-        bot.send_message(creator_id, notify_msg, parse_mode="HTML")
-    except Exception as e:
-        print(f"[Code Owner Notify Error]: {e}")
+        if res:
+            bot.reply_to(
+                message,
+                f"✅ <b>Promo Code Created!</b>\n\n"
+                f"🎟️ <b>Code:</b> <code>{promo_code}</code>\n"
+                f"💰 <b>Reward:</b> ₹{reward_amount:.2f}\n"
+                f"👥 <b>Max Claims:</b> {max_claims}",
+                parse_mode="HTML"
+            )
+        else:
+            bot.reply_to(message, "❌ Failed to create promo code in database.")
