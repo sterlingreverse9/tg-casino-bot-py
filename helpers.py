@@ -57,6 +57,9 @@ def get_target_user(message, target):
         get_or_create_user(user.id, user.username)
         return user.id
 
+    if not target:
+        return None
+
     if target.startswith("@"):
         username = target[1:]
         user = select("users", filters={"username": username}, single=True)
