@@ -6,6 +6,7 @@ from games.coinflip import play_coinflip
 from games.dice_roll import play_dice_roll
 from games.limbo import play_limbo, parse_multiplier
 from games.predict import play_predict_number
+from games.animated_dice import play_animated_game
 from helpers import ensure_user, format_display_name, is_user_frozen
 
 
@@ -13,24 +14,19 @@ def name_of(user):
     return format_display_name(user.first_name, user.username)
 
 
-# --- Public Command: Games List & Commands Overview ---
 @bot.message_handler(commands=["game", "games"])
 def send_games_list(message):
     games_text = (
         "<b>🎰 Available Casino Games & Commands</b>\n"
         "────────────────────────\n\n"
         "<b>🪙 Coinflip</b>\n"
-        "• Command: <code>/cf &lt;amount|all|half&gt; &lt;heads|tails&gt;</code>\n"
-        "• Example: <code>/cf 50 heads</code>\n\n"
+        "• Command: <code>/cf &lt;amount|all|half&gt; &lt;heads|tails&gt;</code>\n\n"
         "<b>🎲 Dice Roll</b>\n"
-        "• Command: <code>/dr &lt;amount|all|half&gt; &lt;choice&gt;</code>\n"
-        "• Choices: <i>high, low, even, odd, 1-6</i> or type <code>/dr 50</code>\n\n"
+        "• Command: <code>/dr &lt;amount|all|half&gt; &lt;choice&gt;</code>\n\n"
         "<b>🚀 Limbo</b>\n"
-        "• Command: <code>/limbo &lt;amount|all|half&gt; &lt;multiplier&gt;</code>\n"
-        "• Example: <code>/limbo 40 2x</code> or <code>/limbo all 6</code>\n\n"
+        "• Command: <code>/limbo &lt;amount|all|half&gt; &lt;multiplier&gt;</code>\n\n"
         "<b>🎯 Predict Number</b>\n"
-        "• Command: <code>/pn &lt;amount|all|half&gt; &lt;1-100&gt;</code>\n"
-        "• Example: <code>/pn 20 77</code>\n\n"
+        "• Command: <code>/pn &lt;amount|all|half&gt; &lt;1-100&gt;</code>\n\n"
         "<b>🏀 Basketball</b>\n"
         "• Command: <code>/basket &lt;amount|all|half&gt;</code>\n\n"
         "<b>🎯 Darts</b>\n"
@@ -39,6 +35,8 @@ def send_games_list(message):
         "• Command: <code>/slots &lt;amount|all|half&gt;</code>\n\n"
         "<b>⚽ Football</b>\n"
         "• Command: <code>/football &lt;amount|all|half&gt;</code>\n\n"
+        "<b>🎳 Bowling</b>\n"
+        "• Command: <code>/bowl &lt;amount|all|half&gt;</code>\n\n"
         "────────────────────────\n"
         "<i>💡 Tip: Ensure you have sufficient balance before placing bets!</i>"
     )
@@ -106,7 +104,7 @@ def build_dr_keyboard(telegram_id: int, amount_str: str):
     return markup
 
 
-@bot.message_handler(commands=["dr", "diceroll"])
+@bot.message_handler(commands=["dr", "diceroll", "dice"])
 def cmd_dr(message):
     ensure_user(message)
     if is_user_frozen(message.from_user.id):
@@ -185,19 +183,19 @@ def cmd_predict_number(message):
     play_predict_number(bot, message.chat.id, message.from_user.id, bet_amount, guess, name_of(message.from_user))
 
 
-# --- Telegram Animated Dice Games (Basketball, Darts, Slots, Football) ---
-@bot.message_handler(commands=["basket", "darts", "slots", "football"])
+@bot.message_handler(commands=["basket", "basketball", "darts", "dart", "slots", "slot", "football", "bowl", "bowling"])
 def cmd_animated_games(message):
     ensure_user(message)
     if is_user_frozen(message.from_user.id):
         bot.reply_to(message, "❄️ Your account is currently frozen.")
         return
     
-    cmd = message.text.split()[0].replace("/", "").split("@")[0].lower()
+    raw_cmd = message.text.split()[0].lower()
+    cmd = raw_cmd.replace("/", "").split("@")[0]
     parts = message.text.split()
 
     if len(parts) < 2:
-        bot.reply_to(message, f"Usage: /{cmd} <amount|all|half>")
+        bot.reply_to(message, f"Usage: /{cmd} <amount|all|half>\nExample: /{cmd} 10")
         return
 
     bet_amount = resolve_amount(message.from_user.id, parts[1])
@@ -205,12 +203,12 @@ def cmd_animated_games(message):
         bot.reply_to(message, "Amount must be a number, 'all', or 'half'.")
         return
 
-    emoji_map = {
-        "basket": "🏀",
-        "darts": "🎯",
-        "slots": "🎰",
-        "football": "⚽"
+    alias_map = {
+        "dart": "darts",
+        "slot": "slots",
+        "bowl": "bowling",
+        "basketball": "basket"
     }
+    game_type = alias_map.get(cmd, cmd)
 
-    # Sends native interactive Telegram dice emojis
-    bot.send_dice(message.chat.id, emoji=emoji_map.get(cmd, "🎲"))
+    play_animated_game(bot, message, message.from_user.id, bet_amount, game_type, name_of(message.from_user))
