@@ -7,7 +7,7 @@ from helpers import announce_win, format_display_name
 from settings import get_min_bet, get_max_bet, get_house_edge
 
 # True 50/50 flip; house edge is applied directly to the payout multiplier
-WIN_CHANCE = 0.90
+WIN_CHANCE = 0.46
 
 HEADS_STICKER = "CAACAgQAAxkBAAFQ0lBqb0WwRqG7K3hRKZXSTKB9rnreEAACtCAAAgG_0VKYWqCdNDm4Nz0E"
 TAILS_STICKER = "CAACAgQAAxkBAAFQ0lRqb0XcyDCzfRrYxgvVk89rMD8U7gACWTwAAq7X0FLUZLVck-M2CT0E"
