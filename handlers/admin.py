@@ -1,318 +1,130 @@
-import html
+import time
 from bot_instance import bot
-from db import insert, update, select, grant_permission, has_permission
-from wallet import get_or_create_user, adjust_balance, resolve_amount
-from settings import get_min_bet, set_min_bet, get_max_bet, set_max_bet, get_house_edge, set_house_edge
-from middleware.admin import is_admin
-from helpers import get_target_user, get_all_admin_ids, set_user_frozen
+from db import select, update, get_all_groups, register_group, has_permission
 
-SUPER_ADMIN_USERNAME = "mrpuppyx"
-
-
-def is_super_admin(user):
-    username = user.username or ""
-    return username.lower() == SUPER_ADMIN_USERNAME.lower()
+# Auto-capture any group chat interaction to keep database updated
+@bot.message_handler(func=lambda m: m.chat.type in ["group", "supergroup"])
+def track_group_chat(message):
+    register_group(message.chat.id, message.chat.title)
 
 
-@bot.message_handler(commands=["freeze", "unfreeze"])
-def handle_freeze_toggle(message):
-    sender_username = (message.from_user.username or "").lower()
-
-    # 1. Access restriction strictly to super admin or admins with 'freeze' permission
-    if not is_super_admin(message.from_user) and not (is_admin(message.from_user.id) or has_permission(message.from_user.id, "freeze")):
-        bot.reply_to(message, "❌ You don't have permission to use this command.")
+@bot.message_handler(commands=["announce"])
+def cmd_announce(message):
+    telegram_id = message.from_user.id
+    if not has_permission(telegram_id, "announce"):
+        bot.reply_to(message, "❌ You do not have permission to send announcements.")
         return
 
-    command = message.text.split()[0].lower()
-    is_freezing = "freeze" in command and "unfreeze" not in command
-
-    target_user_id = None
-    target_name = None
-
-    # 2. Check if used via Reply
-    if message.reply_to_message:
-        target_user = message.reply_to_message.from_user
-        target_user_id = target_user.id
-        target_name = f"@{target_user.username}" if target_user.username else target_user.first_name
-
-    # 3. Check if used via Argument (/freeze @username or /freeze 123456)
-    else:
-        args = message.text.split()[1:]
-        if not args:
-            bot.reply_to(message, f"⚠️ Usage:\n• Reply to a user: <code>{command}</code>\n• Pass user or ID: <code>{command} @username</code>", parse_mode="HTML")
-            return
-        
-        target_user_id = get_target_user(message, args[0])
-        if not target_user_id:
-            bot.reply_to(message, "⚠️ User not found.")
-            return
-        target_name = args[0]
-
-    # 4. Toggle freeze status
-    get_or_create_user(target_user_id, None)
-    set_user_frozen(target_user_id, is_freezing)
-    
-    insert("admin_actions", {
-        "admin_id": message.from_user.id,
-        "action": "freeze" if is_freezing else "unfreeze",
-        "target_id": target_user_id
-    })
-
-    status_msg = "🔒 <b>FROZEN</b> (Games & Withdrawals blocked)" if is_freezing else "🔓 <b>UNFROZEN</b> (Access restored)"
-    bot.reply_to(message, f"User {target_name} ({target_user_id}) has been {status_msg}.", parse_mode="HTML")
-
-
-@bot.message_handler(commands=["giveaccess"])
-def cmd_giveaccess(message):
-    if not is_super_admin(message.from_user):
-        bot.reply_to(message, "❌ Only @mrpuppyx can grant access.")
+    text = message.text.partition(" ")[2].strip()
+    if not text:
+        bot.reply_to(message, "Usage: <code>/announce <message></code>", parse_mode="HTML")
         return
 
-    parts = message.text.split()
-    cmd_name = None
-    target_id = None
-    target_username = None
+    status_msg = bot.reply_to(message, "⏳ Sending announcement to all DMs and Groups...")
 
-    if message.reply_to_message:
-        if len(parts) < 2:
-            bot.reply_to(message, "Usage (reply): /giveaccess <command_name>\nExample: /giveaccess deposit")
-            return
-        cmd_name = parts[1].lower().strip("/")
-        target_id = message.reply_to_message.from_user.id
-        target_username = message.reply_to_message.from_user.username
-    else:
-        if len(parts) < 3:
-            bot.reply_to(message, "Usage: /giveaccess <command_name> <@username|telegram_id>\nExample: /giveaccess deposit @user")
-            return
-        cmd_name = parts[1].lower().strip("/")
-        target_id = get_target_user(message, parts[2])
-        if not target_id:
-            bot.reply_to(message, "User not found.")
-            return
+    # Fetch targets
+    users = select("users") or []
+    groups = get_all_groups()
 
-    get_or_create_user(target_id, target_username)
-    success = grant_permission(target_id, cmd_name, message.from_user.id)
+    dm_targets = [u["telegram_id"] for u in users if u.get("telegram_id")]
+    group_targets = [g["chat_id"] for g in groups if g.get("chat_id")]
 
-    user_ref = f"@{target_username}" if target_username else target_id
-    if success:
-        bot.reply_to(message, f"✅ Granted permission '<b>{cmd_name}</b>' to {user_ref}.", parse_mode="HTML")
-    else:
-        bot.reply_to(message, f"ℹ️ {user_ref} already has access to '<b>{cmd_name}</b>'.", parse_mode="HTML")
+    stats = {
+        "total_attempted": len(dm_targets) + len(group_targets),
+        "dm_success": 0,
+        "dm_failed": 0,
+        "group_success": 0,
+        "group_failed": 0,
+    }
 
+    # Broadcast to DMs
+    for uid in dm_targets:
+        try:
+            bot.send_message(uid, f"📢 <b>ANNOUNCEMENT</b>\n\n{text}", parse_mode="HTML")
+            stats["dm_success"] += 1
+            time.sleep(0.05)
+        except Exception:
+            stats["dm_failed"] += 1
 
-@bot.message_handler(commands=["add"])
-def cmd_add(message):
-    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "add"):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    if message.reply_to_message:
-        if len(parts) != 2:
-            bot.reply_to(message, "Usage (reply): /add <amount>")
-            return
-        target_id = message.reply_to_message.from_user.id
-        amount = float(parts[1])
-    else:
-        if len(parts) != 3:
-            bot.reply_to(message, "Usage:\n/add <@username|telegram_id> <amount>\nOr reply: /add <amount>")
-            return
-        target_id = get_target_user(message, parts[1])
-        if not target_id:
-            bot.reply_to(message, "User not found.")
-            return
-        amount = float(parts[2])
+    # Broadcast to Groups
+    for gid in group_targets:
+        try:
+            bot.send_message(gid, f"📢 <b>ANNOUNCEMENT</b>\n\n{text}", parse_mode="HTML")
+            stats["group_success"] += 1
+            time.sleep(0.05)
+        except Exception:
+            stats["group_failed"] += 1
+            # Mark inactive if bot was kicked
+            update("groups", {"chat_id": gid}, {"is_active": False})
 
-    get_or_create_user(target_id, None)
-    new_balance = adjust_balance(target_id, amount)
-    insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added {amount} coins\nUser: {target_id}\nNew balance: {new_balance}")
-
-
-@bot.message_handler(commands=["deduct"])
-def cmd_deduct(message):
-    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "deduct"):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    if message.reply_to_message:
-        if len(parts) != 2:
-            bot.reply_to(message, "Usage (reply): /deduct <amount|all>")
-            return
-        target_id = message.reply_to_message.from_user.id
-        amount_arg = parts[1]
-    else:
-        if len(parts) != 3:
-            bot.reply_to(message, "Usage: /deduct <@username|telegram_id> <amount|all>")
-            return
-        target_id = get_target_user(message, parts[1])
-        if not target_id:
-            bot.reply_to(message, "User not found.")
-            return
-        amount_arg = parts[2]
-
-    amount = resolve_amount(target_id, amount_arg)
-    if amount is None:
-        bot.reply_to(message, "Amount must be a number or 'all'.")
-        return
-    new_balance = adjust_balance(target_id, -amount)
-    insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted {amount} coins\nUser: {target_id}\nBalance: {new_balance}")
-
-
-@bot.message_handler(commands=["promote"])
-def cmd_promote(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    target_id = get_target_user(message, parts[1]) if len(parts) >= 2 else None
-    if not target_id:
-        bot.reply_to(message, "Usage: /promote <@username|telegram_id> (or reply to their message)")
-        return
-    get_or_create_user(target_id, None)
-    update("users", {"telegram_id": target_id}, {"is_admin": True})
-    insert("admin_actions", {"admin_id": message.from_user.id, "action": "promote", "target_id": target_id})
-    bot.reply_to(message, f"👑 {target_id} is now an admin.")
-
-
-@bot.message_handler(commands=["demote"])
-def cmd_demote(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    target_id = get_target_user(message, parts[1]) if len(parts) >= 2 else None
-    if not target_id:
-        bot.reply_to(message, "Usage: /demote <@username|telegram_id> (or reply to their message)")
-        return
-    update("users", {"telegram_id": target_id}, {"is_admin": False})
-    insert("admin_actions", {"admin_id": message.from_user.id, "action": "demote", "target_id": target_id})
-    bot.reply_to(message, f"⬇️ {target_id} is no longer an admin.")
-
-
-@bot.message_handler(commands=["updatehb"])
-def cmd_updatehb(message):
-    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "updatehb"):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "Usage: /updatehb <amount>")
-        return
-    amount = float(parts[1])
-    update("house", {"id": 1}, {"balance": amount})
-    insert("admin_actions", {"admin_id": message.from_user.id, "action": "updatehb", "amount": amount})
-    bot.reply_to(message, f"🏦 House balance set to {amount}.")
-
-
-@bot.message_handler(commands=["minbet"])
-def cmd_minbet(message):
-    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "minbet"):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "Usage: /minbet <amount>")
-        return
-    try:
-        amt = float(parts[1])
-    except ValueError:
-        bot.reply_to(message, "Amount must be a number.")
-        return
-    set_min_bet(amt)
-    bot.reply_to(message, f"✅ Minimum bet set to {amt} coins.")
-
-
-@bot.message_handler(commands=["maxbet"])
-def cmd_maxbet(message):
-    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "maxbet"):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "Usage: /maxbet <amount> or /maxbet <percent>%\nExample: /maxbet 100  or  /maxbet 5%")
-        return
-    raw = parts[1]
-    try:
-        float(raw.rstrip("%"))
-    except ValueError:
-        bot.reply_to(message, "Invalid value. Use a number or a percent like 5%.")
-        return
-    set_max_bet(raw)
-    label = raw if raw.endswith("%") else f"{raw} coins"
-    bot.reply_to(message, f"✅ Maximum bet set to {label}.")
-
-
-@bot.message_handler(commands=["sethousedge"])
-def cmd_sethousedge(message):
-    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "sethousedge"):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "Usage: /sethousedge <value>\nExample: /sethousedge .10  (10% edge)")
-        return
-    try:
-        val = float(parts[1])
-    except ValueError:
-        bot.reply_to(message, "Value must be a number, e.g. .10 for 10%.")
-        return
-    if val < 0 or val >= 1:
-        bot.reply_to(message, "House edge must be between 0 and 1 (e.g. .10 = 10%).")
-        return
-    set_house_edge(val)
-    bot.reply_to(message, f"✅ House edge set to {val} ({val * 100:.1f}%). Applies to all games immediately.")
-
-
-@bot.message_handler(commands=["resetld"])
-def cmd_resetld(message):
-    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "resetld"):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    update("users", {}, {"total_wagered": 0, "total_won": 0, "total_lost": 0})
-    bot.reply_to(message, "🔄 Leaderboard/wager stats reset for everyone.")
-
-
-@bot.message_handler(commands=["killbal"])
-def cmd_killbal(message):
-    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "killbal"):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    update("users", {}, {"balance": 0})
-    bot.reply_to(message, "💀 Every user's balance has been reset to 0.")
-
-
-@bot.message_handler(commands=["admincommands"])
-def cmd_admin_commands(message):
-    if not is_admin(message.from_user.id) and not has_permission(message.from_user.id, "admincommands"):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    text = (
-        "🛠️ Admin Commands\n\n"
-        "Access Control: /giveaccess <cmd> <user>\n"
-        "User Restrictions: /freeze <user>, /unfreeze <user>\n"
-        "Balance: /add /deduct /killbal /resetld /updatehb\n"
-        "Access: /promote /demote\n"
-        "Game economy: /minbet /maxbet /sethousedge\n"
-        "Games: /start <game> /stop <game>\n"
-        "Rain: /rain /cancelrain\n"
-        "Deposits: /changeupi /approve /decline /pendingdepo /deposithistory /stopdeposit /startdeposit\n"
-        "Withdrawals: /approvewithdraw /declinewithdraw /pendingwithdraw /withdrawhistory /startwithdraw /stopwithdraw\n"
-        "Referrals: /stopreferral /startreferral /updateinviterewards\n"
-        "Other: /announce /msg /botstats"
+    # Detailed Summary
+    summary = (
+        "📊 <b>ANNOUNCEMENT REPORT</b>\n"
+        "────────────────────────\n"
+        f"🎯 <b>Total Targets:</b> {stats['total_attempted']}\n\n"
+        f"👤 <b>DMs Sent:</b> {stats['dm_success']} ✅ | Failed: {stats['dm_failed']} ❌\n"
+        f"👥 <b>Groups Sent:</b> {stats['group_success']} ✅ | Failed: {stats['group_failed']} ❌\n"
+        "────────────────────────\n"
+        "✅ <i>Broadcast completed!</i>"
     )
-    bot.reply_to(message, text)
+    bot.edit_message_text(summary, status_msg.chat.id, status_msg.message_id, parse_mode="HTML")
 
 
-@bot.message_handler(commands=["admin", "admins"])
-def cmd_admins(message):
-    admin_ids = get_all_admin_ids()
-    if not admin_ids:
-        bot.reply_to(message, "No admins configured yet.")
+@bot.message_handler(commands=["msg"])
+def cmd_msg(message):
+    telegram_id = message.from_user.id
+    if not has_permission(telegram_id, "msg"):
+        bot.reply_to(message, "❌ You do not have permission to use /msg.")
         return
-    lines = []
-    for admin_id in admin_ids:
-        u = select("users", filters={"telegram_id": admin_id}, single=True)
-        username = u.get("username") if u else None
-        lines.append(f"👑 @{username}" if username else f"👑 {admin_id}")
-    bot.reply_to(message, "👑 Admins:\n" + "\n".join(lines))
+
+    text = message.text.partition(" ")[2].strip()
+    if not text:
+        bot.reply_to(message, "Usage: <code>/msg <message></code>", parse_mode="HTML")
+        return
+
+    status_msg = bot.reply_to(message, "⏳ Dispatching message across DMs and Groups...")
+
+    users = select("users") or []
+    groups = get_all_groups()
+
+    dm_targets = [u["telegram_id"] for u in users if u.get("telegram_id")]
+    group_targets = [g["chat_id"] for g in groups if g.get("chat_id")]
+
+    stats = {
+        "total_attempted": len(dm_targets) + len(group_targets),
+        "dm_success": 0,
+        "dm_failed": 0,
+        "group_success": 0,
+        "group_failed": 0,
+    }
+
+    # Send to DMs
+    for uid in dm_targets:
+        try:
+            bot.send_message(uid, text, parse_mode="HTML")
+            stats["dm_success"] += 1
+            time.sleep(0.05)
+        except Exception:
+            stats["dm_failed"] += 1
+
+    # Send to Groups
+    for gid in group_targets:
+        try:
+            bot.send_message(gid, text, parse_mode="HTML")
+            stats["group_success"] += 1
+            time.sleep(0.05)
+        except Exception:
+            stats["group_failed"] += 1
+            update("groups", {"chat_id": gid}, {"is_active": False})
+
+    # Summary Output
+    summary = (
+        "📊 <b>BROADCAST REPORT (/msg)</b>\n"
+        "────────────────────────\n"
+        f"🎯 <b>Total Targets:</b> {stats['total_attempted']}\n\n"
+        f"👤 <b>DMs Delivered:</b> {stats['dm_success']} ✅ | Failed: {stats['dm_failed']} ❌\n"
+        f"👥 <b>Groups Delivered:</b> {stats['group_success']} ✅ | Failed: {stats['group_failed']} ❌\n"
+        "────────────────────────\n"
+        "✅ <i>Broadcast completed!</i>"
+    )
+    bot.edit_message_text(summary, status_msg.chat.id, status_msg.message_id, parse_mode="HTML")
