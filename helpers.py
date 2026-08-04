@@ -8,6 +8,23 @@ from deposit import get_deposit_by_utr
 WINS_CHANNEL = "@thecassinowins"
 PLAY_GROUP_URL = "https://t.me/thecassinogroup"
 
+# Global set to track frozen users in memory
+FROZEN_USERS = set()
+
+
+def is_user_frozen(user_id: int) -> bool:
+    """Check if a given user is currently frozen."""
+    return user_id in FROZEN_USERS
+
+
+def set_user_frozen(user_id: int, freeze: bool):
+    """Freeze or unfreeze a given user."""
+    if freeze:
+        FROZEN_USERS.add(user_id)
+    else:
+        FROZEN_USERS.discard(user_id)
+
+
 # Expanded to cover all native Telegram animated games
 GAME_EMOJIS = {
     "Coinflip": "🪙",
@@ -68,7 +85,7 @@ def announce_win(name: str, amount: float, game_label: str):
     emoji = GAME_EMOJIS.get(game_label, "🎰")
     safe_name = html.escape(name)
     text = f"🎉 <b>{safe_name}</b> just won <b>₹{amount:.2f}</b> in <b>{game_label}</b> {emoji}!"
-    
+
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("▶️ Play Here", url=PLAY_GROUP_URL))
     try:
@@ -91,7 +108,7 @@ def notify_admins_of_deposit(telegram_id, username, utr):
     if not dep:
         return
     admin_ids = get_all_admin_ids()
-    
+
     text = (
         f"🆕 <b>Deposit Request Received</b>\n\n"
         f"👤 <b>User:</b> {('@' + username) if username else telegram_id}\n"
