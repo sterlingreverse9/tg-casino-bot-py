@@ -1,6 +1,7 @@
 import html
 from wallet import get_balance, get_house_balance
 from settings import get_min_bet, get_max_bet
+from helpers import is_user_frozen
 
 EMOJI_GAME_CONFIG = {
     "dice": {"emoji": "🎲", "label": "Dice", "aliases": ["dice", "dr"]},
@@ -22,6 +23,13 @@ def setup_dice_handlers(bot):
     @bot.message_handler(commands=all_commands)
     def handle_emoji_game_command(message):
         try:
+            telegram_id = message.from_user.id
+
+            # 1. Freeze Guard Check
+            if is_user_frozen(telegram_id):
+                bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+                return
+
             raw_text = message.text.strip()
             bot_username = bot.get_me().username
             if bot_username and f"@{bot_username}" in raw_text:
@@ -44,7 +52,6 @@ def setup_dice_handlers(bot):
             main_cmd = game_cfg["aliases"][0]
 
             chat_id = message.chat.id
-            telegram_id = message.from_user.id
             username = message.from_user.username
             first_name = message.from_user.first_name or "User"
 
@@ -131,7 +138,14 @@ def setup_dice_handlers(bot):
     @bot.message_handler(content_types=['dice'])
     def handle_user_dice_roll(message):
         telegram_id = message.from_user.id
-        
+
+        # 2. Freeze Guard Check for roll execution
+        if is_user_frozen(telegram_id):
+            if telegram_id in PENDING_ROLLS:
+                del PENDING_ROLLS[telegram_id]
+            bot.reply_to(message, "❄️ Your account is currently frozen. Game canceled.")
+            return
+
         if telegram_id not in PENDING_ROLLS:
             return
 
