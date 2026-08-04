@@ -24,19 +24,23 @@ def send_games_list(message):
         "• Example: <code>/cf 50 heads</code>\n\n"
         "<b>🎲 Dice Roll</b>\n"
         "• Command: <code>/dr &lt;amount|all|half&gt; &lt;choice&gt;</code>\n"
-        "• Choices: <i>high, low, even, odd, 1-6</i> or type <code>/dr 50</code> for buttons.\n\n"
+        "• Choices: <i>high, low, even, odd, 1-6</i> or type <code>/dr 50</code>\n\n"
         "<b>🚀 Limbo</b>\n"
         "• Command: <code>/limbo &lt;amount|all|half&gt; &lt;multiplier&gt;</code>\n"
         "• Example: <code>/limbo 40 2x</code> or <code>/limbo all 6</code>\n\n"
         "<b>🎯 Predict Number</b>\n"
         "• Command: <code>/pn &lt;amount|all|half&gt; &lt;1-100&gt;</code>\n"
         "• Example: <code>/pn 20 77</code>\n\n"
-        "<b>⚔️ Dice Duel</b>\n"
-        "• Command: <code>/diceduel @username &lt;amount&gt;</code>\n\n"
-        "<b>🏰 Tower Game</b>\n"
-        "• Command: <code>/tower &lt;amount&gt;</code>\n\n"
+        "<b>🏀 Basketball</b>\n"
+        "• Command: <code>/basket &lt;amount|all|half&gt;</code>\n\n"
+        "<b>🎯 Darts</b>\n"
+        "• Command: <code>/darts &lt;amount|all|half&gt;</code>\n\n"
+        "<b>🎰 Slots</b>\n"
+        "• Command: <code>/slots &lt;amount|all|half&gt;</code>\n\n"
+        "<b>⚽ Football</b>\n"
+        "• Command: <code>/football &lt;amount|all|half&gt;</code>\n\n"
         "────────────────────────\n"
-        "<i>💡 Tip: Ensure you have sufficient balance in your wallet before placing bets!</i>"
+        "<i>💡 Tip: Ensure you have sufficient balance before placing bets!</i>"
     )
     bot.reply_to(message, games_text, parse_mode="HTML")
 
@@ -45,34 +49,34 @@ def send_games_list(message):
 def cmd_cf(message):
     ensure_user(message)
     if is_user_frozen(message.from_user.id):
-        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+        bot.reply_to(message, "❄️ Your account is currently frozen.")
         return
     if not is_game_enabled("cf"):
         bot.reply_to(message, "Coinflip is currently disabled.")
         return
     parts = message.text.split()
-    if len(parts) != 3 or parts[2] not in ("heads", "tails"):
+    if len(parts) < 3 or parts[2].lower() not in ("heads", "tails"):
         bot.reply_to(message, "Usage: /cf <amount|all|half> <heads|tails>")
         return
     bet_amount = resolve_amount(message.from_user.id, parts[1])
     if bet_amount is None:
         bot.reply_to(message, "Amount must be a number, 'all', or 'half'.")
         return
-    play_coinflip(bot, message, message.from_user.id, bet_amount, parts[2])
+    play_coinflip(bot, message, message.from_user.id, bet_amount, parts[2].lower())
 
 
 @bot.message_handler(commands=["limbo"])
 def cmd_limbo(message):
     ensure_user(message)
     if is_user_frozen(message.from_user.id):
-        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+        bot.reply_to(message, "❄️ Your account is currently frozen.")
         return
     if not is_game_enabled("limbo"):
         bot.reply_to(message, "Limbo is currently disabled.")
         return
     parts = message.text.split()
-    if len(parts) != 3:
-        bot.reply_to(message, "Usage: /limbo <amount|all|half> <multiplier>\nExample: /limbo 40 6  or  /limbo all 2x")
+    if len(parts) < 3:
+        bot.reply_to(message, "Usage: /limbo <amount|all|half> <multiplier>\nExample: /limbo 40 2x")
         return
     bet_amount = resolve_amount(message.from_user.id, parts[1])
     if bet_amount is None:
@@ -106,7 +110,7 @@ def build_dr_keyboard(telegram_id: int, amount_str: str):
 def cmd_dr(message):
     ensure_user(message)
     if is_user_frozen(message.from_user.id):
-        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+        bot.reply_to(message, "❄️ Your account is currently frozen.")
         return
     if not is_game_enabled("dr"):
         bot.reply_to(message, "Dice Roll is currently disabled.")
@@ -128,11 +132,11 @@ def cmd_dr(message):
         try:
             float(amount_str)
         except ValueError:
-            bot.reply_to(message, "Amount must be a number, 'all', or 'half'.")
+            bot.reply_to(message, "Usage: /dr <amount> <choice> or /dr <amount>")
             return
 
     markup = build_dr_keyboard(telegram_id, amount_str)
-    bot.send_message(message.chat.id, f"🎲 Dice Roll • bet: {amount_str}\nPick your bet:", reply_markup=markup)
+    bot.send_message(message.chat.id, f"🎲 Dice Roll • Bet: {amount_str}\nPick your choice:", reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("dr:"))
@@ -160,7 +164,7 @@ def handle_dr_callback(call):
 def cmd_predict_number(message):
     ensure_user(message)
     if is_user_frozen(message.from_user.id):
-        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+        bot.reply_to(message, "❄️ Your account is currently frozen.")
         return
     if not is_game_enabled("pn"):
         bot.reply_to(message, "Predict Number is currently disabled.")
@@ -179,3 +183,34 @@ def cmd_predict_number(message):
         bot.reply_to(message, "Number must be a whole number between 1 and 100.")
         return
     play_predict_number(bot, message.chat.id, message.from_user.id, bet_amount, guess, name_of(message.from_user))
+
+
+# --- Telegram Animated Dice Games (Basketball, Darts, Slots, Football) ---
+@bot.message_handler(commands=["basket", "darts", "slots", "football"])
+def cmd_animated_games(message):
+    ensure_user(message)
+    if is_user_frozen(message.from_user.id):
+        bot.reply_to(message, "❄️ Your account is currently frozen.")
+        return
+    
+    cmd = message.text.split()[0].replace("/", "").split("@")[0].lower()
+    parts = message.text.split()
+
+    if len(parts) < 2:
+        bot.reply_to(message, f"Usage: /{cmd} <amount|all|half>")
+        return
+
+    bet_amount = resolve_amount(message.from_user.id, parts[1])
+    if bet_amount is None:
+        bot.reply_to(message, "Amount must be a number, 'all', or 'half'.")
+        return
+
+    emoji_map = {
+        "basket": "🏀",
+        "darts": "🎯",
+        "slots": "🎰",
+        "football": "⚽"
+    }
+
+    # Sends native interactive Telegram dice emojis
+    bot.send_dice(message.chat.id, emoji=emoji_map.get(cmd, "🎲"))
