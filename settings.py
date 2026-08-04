@@ -4,6 +4,7 @@ from config import HOUSE_EDGE as DEFAULT_HOUSE_EDGE
 DEFAULT_MIN_BET = 10
 DEFAULT_MAX_BET_PCT = 0.05  # 5% of house balance if never set
 DEFAULT_MIN_WITHDRAW = 100.0
+DEFAULT_HOUSE_BALANCE = 10000.0  # Fallback house balance
 
 
 def _get(key, default):
@@ -19,6 +20,20 @@ def _set(key, value):
         update("settings", {"key": key}, {"value": str(value)})
 
 
+# --- House Balance Helpers ---
+
+def get_house_balance() -> float:
+    """Retrieves current house balance from DB or returns default fallback."""
+    return float(_get("house_balance", DEFAULT_HOUSE_BALANCE))
+
+
+def set_house_balance(amount: float):
+    """Sets/updates the house balance in DB."""
+    _set("house_balance", amount)
+
+
+# --- Bet Limits & Settings ---
+
 def get_min_bet() -> float:
     return float(_get("min_bet", DEFAULT_MIN_BET))
 
@@ -27,7 +42,10 @@ def set_min_bet(amount: float):
     _set("min_bet", amount)
 
 
-def get_max_bet(house_balance: float) -> float:
+def get_max_bet(house_balance: float = None) -> float:
+    if house_balance is None:
+        house_balance = get_house_balance()
+
     raw = _get("max_bet", None)
     if raw is None:
         return house_balance * DEFAULT_MAX_BET_PCT
