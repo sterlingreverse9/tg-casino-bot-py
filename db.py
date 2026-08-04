@@ -32,57 +32,70 @@ def select(table, filters=None, order=None, desc=False, limit=None, single=False
 
 
 def insert(table, row):
-    resp = requests.post(f"{BASE}/{table}", headers=HEADERS, json=row)
-    resp.raise_for_status()
-    data = resp.json()
-    return data[0] if data else None
+    try:
+        resp = requests.post(f"{BASE}/{table}", headers=HEADERS, json=row)
+        resp.raise_for_status()
+        data = resp.json()
+        return data[0] if data else None
+    except Exception as e:
+        print(f"[Supabase Insert Error on {table}]: {e}")
+        return None
 
 
 def update(table, filters, values):
     params = {}
     for k, v in filters.items():
         params[k] = f"eq.{v}"
-    resp = requests.patch(f"{BASE}/{table}", headers=HEADERS, params=params, json=values)
-    resp.raise_for_status()
-    data = resp.json()
-    return data[0] if data else None
+    try:
+        resp = requests.patch(f"{BASE}/{table}", headers=HEADERS, params=params, json=values)
+        resp.raise_for_status()
+        data = resp.json()
+        return data[0] if data else None
+    except Exception as e:
+        print(f"[Supabase Update Error on {table}]: {e}")
+        return None
+
+
+def upsert(table, row, on_conflict="chat_id"):
+    """Insert or update on primary key conflict using Supabase resolution headers."""
+    headers = HEADERS.copy()
+    headers["Prefer"] = f"resolution=merge-duplicates,return=representation"
+    try:
+        resp = requests.post(f"{BASE}/{table}", headers=headers, json=row)
+        resp.raise_for_status()
+        data = resp.json()
+        return data[0] if data else None
+    except Exception as e:
+        print(f"[Supabase Upsert Error on {table}]: {e}")
+        return None
 
 
 # --- Group Tracking Helpers ---
 
 def register_group(chat_id: int, title: str):
-    """Automatically record or update group info in the database."""
-    try:
-        existing = select("groups", filters={"chat_id": chat_id}, single=True)
-        if not existing:
-            insert("groups", {"chat_id": chat_id, "title": title, "is_active": True})
-        else:
-            update("groups", {"chat_id": chat_id}, {"title": title, "is_active": True})
-    except Exception as e:
-        print(f"[Group Register Error]: {e}")
+    """Automatically record or update active group info."""
+    row = {
+        "chat_id": chat_id,
+        "title": title or "Telegram Group",
+        "is_active": True
+    }
+    upsert("groups", row, on_conflict="chat_id")
 
 
 def get_all_groups():
-    """Retrieve all recorded active groups."""
-    try:
-        groups = select("groups", filters={"is_active": True}) or []
-        return groups
-    except Exception:
-        return []
+    """Retrieve all active groups."""
+    groups = select("groups", filters={"is_active": True})
+    return groups if isinstance(groups, list) else []
 
 
 # --- Permission System Helpers ---
 
 def grant_permission(telegram_id: int, permission: str, granted_by: int):
-    try:
-        insert("user_permissions", {
-            "telegram_id": telegram_id,
-            "permission": permission.lower(),
-            "granted_by": granted_by
-        })
-        return True
-    except Exception:
-        return False
+    return insert("user_permissions", {
+        "telegram_id": telegram_id,
+        "permission": permission.lower(),
+        "granted_by": granted_by
+    }) is not None
 
 
 def has_permission(telegram_id: int, permission: str) -> bool:
@@ -96,4 +109,4 @@ def has_permission(telegram_id: int, permission: str) -> bool:
 
 def get_all_permitted_users(permission: str):
     perm_list = select("user_permissions", filters={"permission": permission.lower()})
-    return [p["telegram_id"] for p in perm_list] if perm_list else []
+    return [p["telegram_id"] for p in perm_list if "telegram_id" in p] if isinstance(perm_list, list) else []
