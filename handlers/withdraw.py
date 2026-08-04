@@ -6,7 +6,7 @@ from db import select, has_permission
 from wallet import get_balance, adjust_balance, get_wager_remaining
 from state import withdraw_states, admin_wd_states
 from settings import get_min_withdraw, set_min_withdraw
-from helpers import ensure_user, get_all_admin_ids
+from helpers import ensure_user, get_all_admin_ids, is_user_frozen
 from withdraw import (
     create_withdrawal,
     get_withdrawal,
@@ -23,7 +23,7 @@ FEE_PERCENT = 0.025  # 2.5%
 def notify_admin_withdrawal(wd_id, amt, fee, net, upi, user_ref, telegram_id):
     """Safely notifies super admin @mrpuppyx and staff members about a new withdrawal."""
     admin_ids = set(get_all_admin_ids())
-    
+
     # Search users case-insensitively for super admin
     users = select("users") or []
     for u in users:
@@ -74,6 +74,10 @@ def cmd_wagerstats(message):
 @bot.message_handler(commands=["withdraw", "wd"])
 def cmd_withdraw(message):
     ensure_user(message)
+    if is_user_frozen(message.from_user.id):
+        bot.reply_to(message, "❄️ Your account is currently frozen. You cannot play games or make withdrawals.")
+        return
+
     if message.chat.type != "private":
         markup = InlineKeyboardMarkup()
         markup.add(
@@ -123,6 +127,11 @@ def cmd_withdraw(message):
     content_types=["text"],
 )
 def handle_withdraw_amount(message):
+    if is_user_frozen(message.from_user.id):
+        withdraw_states.pop(message.from_user.id, None)
+        bot.reply_to(message, "❄️ Your account is currently frozen. Withdrawal cancelled.")
+        return
+
     state = withdraw_states[message.from_user.id]
     try:
         amt = float(message.text.strip())
@@ -171,6 +180,11 @@ def handle_withdraw_amount(message):
     content_types=["text"],
 )
 def handle_withdraw_upi(message):
+    if is_user_frozen(message.from_user.id):
+        withdraw_states.pop(message.from_user.id, None)
+        bot.reply_to(message, "❄️ Your account is currently frozen. Withdrawal cancelled.")
+        return
+
     upi = message.text.strip()
     if "@" not in upi or len(upi) < 5:
         bot.reply_to(
@@ -214,6 +228,11 @@ def handle_withdraw_upi(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_withdraw")
 def handle_withdraw_confirm(call):
+    if is_user_frozen(call.from_user.id):
+        withdraw_states.pop(call.from_user.id, None)
+        bot.answer_callback_query(call.id, "❄️ Your account is currently frozen.", show_alert=True)
+        return
+
     bot.answer_callback_query(call.id)
     user_id = call.from_user.id
     state = withdraw_states.get(user_id)
