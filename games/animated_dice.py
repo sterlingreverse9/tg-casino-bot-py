@@ -18,37 +18,32 @@ def play_animated_game(bot, message, telegram_id: int, bet_amount: float, game_t
         bot.reply_to(message, f"Not enough balance. Your balance: ₹{balance:.2f}")
         return
 
-    # Deduct bet upfront
     adjust_balance(telegram_id, -bet_amount)
 
     emoji_map = {
         "football": "⚽",
         "basket": "🏀",
         "darts": "🎯",
-        "slots": "🎰"
+        "slots": "🎰",
+        "bowling": "🎳"
     }
     emoji = emoji_map.get(game_type, "⚽")
 
-    # Send the interactive animated emoji and capture the roll value
     sent_dice = bot.send_dice(message.chat.id, emoji=emoji)
     dice_value = sent_dice.dice.value
 
-    # Evaluate win conditions based on Telegram dice outcome values
     won = False
     multiplier = 0.0
 
     if game_type == "football":
-        # Telegram football dice: values 3, 4, 5 are goals
         if dice_value in (3, 4, 5):
             won = True
             multiplier = 1.8
     elif game_type == "basket":
-        # Telegram basketball dice: values 4, 5 are shots made
         if dice_value in (4, 5):
             won = True
             multiplier = 1.9
     elif game_type == "darts":
-        # Telegram darts: 6 is bullseye (3x), 5 is inner ring (1.5x)
         if dice_value == 6:
             won = True
             multiplier = 3.0
@@ -56,13 +51,19 @@ def play_animated_game(bot, message, telegram_id: int, bet_amount: float, game_t
             won = True
             multiplier = 1.5
     elif game_type == "slots":
-        # Telegram slots: 64 is triple 7s (777)
         if dice_value == 64:
             won = True
             multiplier = 10.0
-        elif dice_value in (1, 22, 43):  # 2 matching symbols
+        elif dice_value in (1, 22, 43):
             won = True
             multiplier = 2.0
+    elif game_type == "bowling":
+        if dice_value == 6:
+            won = True
+            multiplier = 3.0
+        elif dice_value in (4, 5):
+            won = True
+            multiplier = 1.5
 
     payout = round(bet_amount * multiplier, 2) if won else 0.0
     if won:
@@ -77,15 +78,14 @@ def play_animated_game(bot, message, telegram_id: int, bet_amount: float, game_t
         meta={"dice_value": dice_value, "multiplier": multiplier},
     )
 
-    # Wait for animation to complete on client screen before sending outcome
     time.sleep(3)
 
     new_balance = get_balance(telegram_id)
     if won:
         bot.reply_to(
             message,
-            f"🎉 <b>GOAL / HIT!</b>\n"
-            f"Result: {dice_value} | Multiplier: {multiplier}×\n"
+            f"🎉 <b>WIN / HIT!</b>\n"
+            f"Score: {dice_value} | Multiplier: {multiplier}×\n"
             f"Won: ₹{payout:.2f} | Balance: ₹{new_balance:.2f}",
             parse_mode="HTML"
         )
