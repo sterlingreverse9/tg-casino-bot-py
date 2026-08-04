@@ -14,18 +14,22 @@ def process_user_roll(bot, chat_id, telegram_id, game_data, user_dice_val):
         bet_amount = game_data["bet_amount"]
         rounds = game_data["rounds"]
         curr_round = game_data["current_round"]
-        username = game_data["username"]
-        first_name = game_data["first_name"]
-        emoji = game_data["emoji"]
+        username = game_data.get("username")
+        first_name = game_data.get("first_name")
+        emoji = game_data.get("emoji", "🎲")
 
         safe_name = html.escape(first_name or "User")
         user_mention = f"@{username}" if username else f'<a href="tg://user?id={telegram_id}">{safe_name}</a>'
 
-        # Deduct bet only on Round 1
+        # Deduct bet strictly on Round 1
         if curr_round == 1:
             current_bal = get_balance(telegram_id)
             if current_bal < bet_amount:
-                bot.send_message(chat_id, f"❌ {user_mention}, insufficient balance for this bet.", parse_mode="HTML")
+                bot.send_message(
+                    chat_id, 
+                    f"❌ {user_mention}, insufficient balance for this bet.", 
+                    parse_mode="HTML"
+                )
                 return True
             adjust_balance(telegram_id, -bet_amount)
 
@@ -34,13 +38,17 @@ def process_user_roll(bot, chat_id, telegram_id, game_data, user_dice_val):
 
         # Bot rolls in response
         time.sleep(1.0)
-        bot.send_message(chat_id, f"🤖 <b>Bot</b> is rolling against {user_mention}...", parse_mode="HTML")
+        bot.send_message(
+            chat_id, 
+            f"🤖 <b>Bot</b> is rolling {emoji} against {user_mention}...", 
+            parse_mode="HTML"
+        )
         msg_bot = bot.send_dice(chat_id, emoji=emoji)
         b_val = msg_bot.dice.value
         game_data["bot_total"] += b_val
         time.sleep(2.0)
 
-        # If more rounds left, prompt for next roll
+        # Prompt for next round if unfinished
         if curr_round < rounds:
             game_data["current_round"] += 1
             next_round = game_data["current_round"]
@@ -55,7 +63,10 @@ def process_user_roll(bot, chat_id, telegram_id, game_data, user_dice_val):
         # All rounds completed -> Evaluate Final Outcome
         player_total = game_data["player_total"]
         bot_total = game_data["bot_total"]
-        house_edge = get_house_edge() if callable(get_house_edge) else 0.05
+        
+        # Resolve house edge dynamically
+        raw_edge = get_house_edge() if callable(get_house_edge) else get_house_edge
+        house_edge = raw_edge if isinstance(raw_edge, (int, float)) else 0.05
 
         if player_total > bot_total:
             payout_multiplier = 2.0 - house_edge
@@ -71,7 +82,10 @@ def process_user_roll(bot, chat_id, telegram_id, game_data, user_dice_val):
                 f"💵 <b>Payout:</b> ₹{win_amount:.2f} (Profit: ₹{net_profit:.2f})"
             )
             bot.send_message(chat_id, result_text, parse_mode="HTML")
-            announce_win(username or first_name or "Player", win_amount, "Dice Duel")
+            
+            # Announce big win in group/channel
+            display_name = f"@{username}" if username else (first_name or "Player")
+            announce_win(display_name, win_amount, f"{emoji} Game Duel")
 
         elif player_total < bot_total:
             record_bet(telegram_id, "dice_duel", bet_amount, 0.0, "loss")
@@ -84,7 +98,7 @@ def process_user_roll(bot, chat_id, telegram_id, game_data, user_dice_val):
             bot.send_message(chat_id, result_text, parse_mode="HTML")
 
         else:
-            # Tie - Return original bet
+            # Tie / Push -> Refund original wager
             adjust_balance(telegram_id, bet_amount)
             record_bet(telegram_id, "dice_duel", bet_amount, bet_amount, "push")
             result_text = (
@@ -98,6 +112,6 @@ def process_user_roll(bot, chat_id, telegram_id, game_data, user_dice_val):
         return True
 
     except Exception as e:
-        print(f"Error executing dice duel game step: {e}")
+        print(f"[Dice Game Execution Error]: {e}")
         bot.send_message(chat_id, "⚠️ An error occurred while processing your game request.")
         return True
