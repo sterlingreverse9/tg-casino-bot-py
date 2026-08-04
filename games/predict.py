@@ -3,7 +3,7 @@ from wallet import adjust_balance, get_balance, get_house_balance, record_bet
 from settings import get_max_bet, get_min_bet
 from helpers import announce_win
 
-PAYOUT_MULTIPLIER = 70
+PAYOUT_MULTIPLIER = 7
 
 
 def play_predict_number(
@@ -15,8 +15,8 @@ def play_predict_number(
     display_name: str = None,
     username: str = None,
 ):
-    if guess < 1 or guess > 100:
-        bot.send_message(chat_id, "Pick a number between 1 and 100.")
+    if guess < 1 or guess > 10:
+        bot.send_message(chat_id, "Pick a number between 1 and 10.")
         return
 
     balance = get_balance(telegram_id)
@@ -37,7 +37,7 @@ def play_predict_number(
 
     adjust_balance(telegram_id, -bet_amount)
 
-    number = random.randint(1, 100)
+    number = random.randint(1, 10)
     won = number == guess
     payout = round(bet_amount * PAYOUT_MULTIPLIER, 2) if won else 0
     if won:
