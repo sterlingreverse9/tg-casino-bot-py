@@ -1,8 +1,10 @@
 import html
+import time
+import threading
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from wallet import get_balance, adjust_balance, get_wager_remaining
+from wallet import get_balance, adjust_balance
 from settings import get_min_bet, get_max_bet, get_house_balance
-from helpers import ensure_user, is_user_frozen, format_display_name
+from helpers import ensure_user, is_user_frozen
 
 EMOJI_GAME_CONFIG = {
     "dice": {"emoji": "🎲", "label": "Dice", "aliases": ["dice", "dr"]},
@@ -13,11 +15,19 @@ EMOJI_GAME_CONFIG = {
     "bowl": {"emoji": "🎳", "label": "Bowling", "aliases": ["bowl", "bowling"]},
 }
 
-# Pending PvP Challenges: { challenge_id: { "challenger_id": int, "target_username": str, "target_id": int, "amount": float, ... } }
-PENDING_CHALLENGES = {}
+# State Tracking
+PENDING_CHALLENGES = {}  # { challenge_id: {...} }
+ACTIVE_BOT_GAMES = {}    # { user_id: {...} }
+ACTIVE_PVP_GAMES = {}    # { game_id: {...} }
+TIMERS = {}              # { game_id: Threading.Timer }
 
-# Active PvP Games: { game_id: { "player1_id": int, "player2_id": int, "current_turn": int, "p1_score": 0, "p2_score": 0, ... } }
-ACTIVE_PVP_GAMES = {}
+
+def get_mention(user):
+    """Returns @username or HTML link fallback if username is missing."""
+    if getattr(user, "username", None):
+        return f"@{user.username}"
+    first_name = html.escape(user.first_name or "User")
+    return f'<a href="tg://user?id={user.id}">{first_name}</a>'
 
 
 def setup_dice_handlers(bot):
@@ -25,14 +35,18 @@ def setup_dice_handlers(bot):
     for cfg in EMOJI_GAME_CONFIG.values():
         all_commands.extend(cfg["aliases"])
 
+    # ------------------------------------------------------------------
+    # 1. COMMAND HANDLER
+    # ------------------------------------------------------------------
     @bot.message_handler(commands=all_commands)
-    def handle_emoji_game_command(message):
+    def handle_game_command(message):
         try:
             ensure_user(message)
-            telegram_id = message.from_user.id
+            user = message.from_user
+            user_mention = get_mention(user)
 
-            if is_user_frozen(telegram_id):
-                bot.reply_to(message, "❄️ Your account is currently frozen.")
+            if is_user_frozen(user.id):
+                bot.reply_to(message, f"❄️ {user_mention}, your account is currently frozen.", parse_mode="HTML")
                 return
 
             raw_text = message.text.strip()
@@ -43,12 +57,12 @@ def setup_dice_handlers(bot):
             args = raw_text.split()
             cmd_name = args[0].lstrip("/").lower()
 
+            # Identify Game Type
             game_cfg = None
             for cfg in EMOJI_GAME_CONFIG.values():
                 if cmd_name in cfg["aliases"]:
                     game_cfg = cfg
                     break
-
             if not game_cfg:
                 game_cfg = EMOJI_GAME_CONFIG["dice"]
 
@@ -57,245 +71,415 @@ def setup_dice_handlers(bot):
             main_cmd = game_cfg["aliases"][0]
             chat_id = message.chat.id
 
-            # Usage Help
-            if len(args) < 3 or not args[1].startswith("@"):
-                help_text = (
-                    f"⚔️ <b>{emoji} {label} PvP Challenge</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"<b>Usage:</b>\n"
-                    f"<code>/{main_cmd} @username 50</code> — Challenge a player (1 round)\n"
-                    f"<code>/{main_cmd} @username 50 3</code> — Challenge for 3 rounds\n\n"
-                    f"📌 <i>Both players bet equal amounts. Winner takes all!</i>"
+            # Show Guide if no args
+            if len(args) == 1:
+                guide_text = (
+                    f"<b>{emoji} {label} Game Guide</b>\n\n"
+                    f"<b>🎮 Play vs Bot:</b>\n"
+                    f"• <code>/{main_cmd} 10</code> — Play 1 Round\n"
+                    f"• <code>/{main_cmd} 10 3</code> — Play Best of 3 Rounds\n\n"
+                    f"<b>⚔️ Play vs Player (PvP):</b>\n"
+                    f"• <code>/{main_cmd} 10 @username</code> — Challenge player (1 round)\n"
+                    f"• <code>/{main_cmd} 10 3 @username</code> — Challenge player (3 rounds)"
                 )
-                bot.send_message(chat_id, help_text, parse_mode="HTML")
+                bot.send_message(chat_id, guide_text, parse_mode="HTML")
                 return
 
-            target_username = args[1].lstrip("@").strip()
-            if target_username.lower() == (message.from_user.username or "").lower():
-                bot.reply_to(message, "❌ You cannot challenge yourself!")
-                return
-
-            try:
-                bet_amount = float(args[2])
-            except ValueError:
-                bot.reply_to(message, "⚠️ Invalid bet amount.")
-                return
-
+            # Parse command parameters: Bet, Rounds, Target User
+            target_username = None
+            bet_amount = None
             rounds = 1
-            if len(args) >= 4:
-                try:
-                    rounds = int(args[3])
-                    if rounds < 1 or rounds > 5:
-                        bot.reply_to(message, "⚠️ Rounds must be between 1 and 5.")
-                        return
-                except ValueError:
-                    bot.reply_to(message, "⚠️ Invalid round number.")
-                    return
 
+            for arg in args[1:]:
+                if arg.startswith("@"):
+                    target_username = arg.lstrip("@").lower()
+                elif bet_amount is None:
+                    try:
+                        bet_amount = float(arg)
+                    except ValueError:
+                        pass
+                else:
+                    try:
+                        rounds = int(arg)
+                    except ValueError:
+                        pass
+
+            if bet_amount is None or bet_amount <= 0:
+                bot.send_message(chat_id, f"⚠️ {user_mention}, please specify a valid bet amount.", parse_mode="HTML")
+                return
+
+            if rounds < 1 or rounds > 10:
+                bot.send_message(chat_id, f"⚠️ {user_mention}, rounds must be between 1 and 10.", parse_mode="HTML")
+                return
+
+            # Validate Wager Limits
             min_bet = get_min_bet()
             max_bet = get_max_bet(get_house_balance())
 
-            if bet_amount < min_bet or bet_amount > max_bet:
-                bot.reply_to(message, f"⚠️ Bet amount must be between ₹{min_bet} and ₹{round(max_bet, 2)}.")
+            if bet_amount < min_bet:
+                bot.send_message(chat_id, f"⚠️ {user_mention}, minimum bet is ₹{min_bet}.", parse_mode="HTML")
+                return
+            if bet_amount > max_bet:
+                bot.send_message(chat_id, f"⚠️ {user_mention}, maximum bet is ₹{round(max_bet, 2)}.", parse_mode="HTML")
                 return
 
-            challenger_bal = get_balance(telegram_id)
-            if challenger_bal < bet_amount:
-                bot.reply_to(message, f"❌ Insufficient balance! You have ₹{challenger_bal:.2f}.")
+            user_bal = get_balance(user.id)
+            if user_bal < bet_amount:
+                bot.send_message(chat_id, f"❌ {user_mention}, you don't have enough balance! (Balance: ₹{user_bal:.2f})", parse_mode="HTML")
                 return
 
-            challenge_id = f"{telegram_id}_{int(message.date)}"
-            PENDING_CHALLENGES[challenge_id] = {
-                "challenger_id": telegram_id,
-                "challenger_name": message.from_user.first_name,
-                "challenger_user": message.from_user.username or "",
-                "target_username": target_username.lower(),
+            # --- MODE 1: PVP VS PLAYER ---
+            if target_username:
+                if target_username == (user.username or "").lower():
+                    bot.send_message(chat_id, f"❌ {user_mention}, you cannot challenge yourself!", parse_mode="HTML")
+                    return
+
+                challenge_id = f"chal_{user.id}_{int(time.time())}"
+                PENDING_CHALLENGES[challenge_id] = {
+                    "challenger_id": user.id,
+                    "challenger_mention": user_mention,
+                    "target_username": target_username,
+                    "bet_amount": bet_amount,
+                    "rounds": rounds,
+                    "emoji": emoji,
+                    "chat_id": chat_id,
+                }
+
+                markup = InlineKeyboardMarkup()
+                markup.add(
+                    InlineKeyboardButton("Accept ⚔️", callback_data=f"pvp_accept_{challenge_id}"),
+                    InlineKeyboardButton("Reject ❌", callback_data=f"pvp_reject_{challenge_id}")
+                )
+
+                bot.send_message(
+                    chat_id,
+                    f"⚔️ <b>PvP Challenge Issued!</b> {emoji}\n\n"
+                    f"👤 <b>Challenger:</b> {user_mention}\n"
+                    f"🎯 <b>Challenged:</b> @{target_username}\n"
+                    f"💵 <b>Stake:</b> ₹{bet_amount:.2f} each\n"
+                    f"🔄 <b>Rounds:</b> {rounds}\n\n"
+                    f"@{target_username}, accept or reject below:",
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
+                return
+
+            # --- MODE 2: VS BOT ---
+            if user.id in ACTIVE_BOT_GAMES:
+                bot.send_message(chat_id, f"⚠️ {user_mention}, finish your current game first!", parse_mode="HTML")
+                return
+
+            adjust_balance(user.id, -bet_amount)
+
+            ACTIVE_BOT_GAMES[user.id] = {
+                "user_mention": user_mention,
                 "bet_amount": bet_amount,
                 "rounds": rounds,
+                "current_round": 1,
+                "user_wins": 0,
+                "bot_wins": 0,
                 "emoji": emoji,
-                "label": label,
-                "chat_id": chat_id,
+                "chat_id": chat_id
             }
 
-            markup = InlineKeyboardMarkup()
-            markup.add(
-                InlineKeyboardButton("Accept Challenge ⚔️", callback_data=f"pvp_accept_{challenge_id}"),
-                InlineKeyboardButton("Decline ❌", callback_data=f"pvp_decline_{challenge_id}"),
+            bot.send_message(
+                chat_id,
+                f"🎮 {user_mention}, game started! (Round 1 of {rounds})\n"
+                f"Send <b>{emoji}</b> now to make your roll!",
+                parse_mode="HTML"
             )
-
-            challenger_tag = f"@{message.from_user.username}" if message.from_user.username else html.escape(message.from_user.first_name)
-            msg = (
-                f"⚔️ <b>PVP CHALLENGE ISSUED!</b> {emoji}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 <b>Challenger:</b> {challenger_tag}\n"
-                f"🎯 <b>Target:</b> @{target_username}\n"
-                f"💵 <b>Stake:</b> ₹{bet_amount:.2f} each\n"
-                f"🏆 <b>Total Pot:</b> ₹{bet_amount * 2:.2f}\n"
-                f"🔄 <b>Rounds:</b> {rounds}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"👇 @{target_username}, click below to accept or decline:"
-            )
-            bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
 
         except Exception as e:
-            print(f"[PvP Command Error]: {e}")
+            print(f"[Game Command Error]: {e}")
 
+    # ------------------------------------------------------------------
+    # 2. PVP INLINE CALLBACKS
+    # ------------------------------------------------------------------
     @bot.callback_query_handler(func=lambda call: call.data.startswith("pvp_"))
-    def handle_pvp_callbacks(call):
+    def handle_pvp_callback(call):
         try:
-            action, _, challenge_id = call.data.partition("_")[2].partition("_")
-            challenge_id = f"{action}_{challenge_id}" if not action.startswith("accept") and not action.startswith("decline") else challenge_id
-            
-            # Extract real action & challenge_id safely
-            parts = call.data.split("_")
-            action = parts[1]
-            c_id = "_".join(parts[2:])
+            action, _, c_id = call.data.partition("_")[2].partition("_")
+            c_id = f"{action}_{c_id}"
 
             if c_id not in PENDING_CHALLENGES:
-                bot.answer_callback_query(call.id, "This challenge has expired.", show_alert=True)
+                bot.answer_callback_query(call.id, "This challenge expired or is invalid.", show_alert=True)
                 return
 
-            ch = PENDING_CHALLENGES[c_id]
-            user = call.from_user
+            chal = PENDING_CHALLENGES[c_id]
+            clicker = call.from_user
+            clicker_mention = get_mention(clicker)
 
-            if (user.username or "").lower() != ch["target_username"]:
+            if (clicker.username or "").lower() != chal["target_username"]:
                 bot.answer_callback_query(call.id, "This challenge is not for you!", show_alert=True)
                 return
 
-            if action == "decline":
+            if action == "reject":
                 del PENDING_CHALLENGES[c_id]
-                bot.answer_callback_query(call.id, "Challenge declined.")
-                bot.edit_message_text("❌ Challenge was declined.", call.message.chat.id, call.message.message_id)
+                bot.answer_callback_query(call.id, "Challenge rejected.")
+                bot.edit_message_text(f"❌ {clicker_mention} rejected the challenge from {chal['challenger_mention']}.", chal['chat_id'], call.message.message_id, parse_mode="HTML")
                 return
 
-            if is_user_frozen(user.id):
-                bot.answer_callback_query(call.id, "❄️ Your account is frozen.", show_alert=True)
+            # Check target balance
+            clicker_bal = get_balance(clicker.id)
+            bet = chal["bet_amount"]
+            if clicker_bal < bet:
+                bot.answer_callback_query(call.id, f"You need ₹{bet:.2f} balance to accept!", show_alert=True)
                 return
 
-            target_bal = get_balance(user.id)
-            bet_amt = ch["bet_amount"]
+            # Deduct balance from both
+            adjust_balance(chal["challenger_id"], -bet)
+            adjust_balance(clicker.id, -bet)
 
-            if target_bal < bet_amt:
-                bot.answer_callback_query(call.id, f"Insufficient balance! You need ₹{bet_amt:.2f}.", show_alert=True)
-                return
-
-            # Deduct bets from both players
-            adjust_balance(ch["challenger_id"], -bet_amt)
-            adjust_balance(user.id, -bet_amt)
-
-            # Start active PvP Game
-            game_id = f"game_{c_id}"
+            game_id = f"pvpgame_{c_id}"
             ACTIVE_PVP_GAMES[game_id] = {
-                "p1_id": ch["challenger_id"],
-                "p1_name": ch["challenger_name"],
-                "p2_id": user.id,
-                "p2_name": user.first_name,
-                "p1_score": 0,
-                "p2_score": 0,
-                "current_turn": ch["challenger_id"],
-                "emoji": ch["emoji"],
-                "bet_amount": bet_amt,
-                "rounds": ch["rounds"],
+                "game_id": game_id,
+                "p1_id": chal["challenger_id"],
+                "p1_mention": chal["challenger_mention"],
+                "p2_id": clicker.id,
+                "p2_mention": clicker_mention,
+                "p1_wins": 0,
+                "p2_wins": 0,
+                "p1_roll": None,
+                "p2_roll": None,
+                "current_turn": chal["challenger_id"],
+                "bet_amount": bet,
+                "rounds": chal["rounds"],
                 "current_round": 1,
-                "chat_id": ch["chat_id"],
+                "emoji": chal["emoji"],
+                "chat_id": chal["chat_id"]
             }
 
             del PENDING_CHALLENGES[c_id]
-            bot.answer_callback_query(call.id, "Challenge accepted!")
+            bot.answer_callback_query(call.id, "Game Accepted!")
 
-            p1_tag = f"<a href='tg://user?id={ch['challenger_id']}'>{html.escape(ch['challenger_name'])}</a>"
-            
-            start_msg = (
-                f"🚀 <b>PVP GAME STARTED!</b> {ch['emoji']}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🏆 <b>Prize Pool:</b> ₹{bet_amt * 2:.2f}\n"
-                f"🔄 <b>Round 1 of {ch['rounds']}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"👉 {p1_tag}, send <b>{ch['emoji']}</b> now to take your turn!"
+            bot.edit_message_text(
+                f"⚔️ <b>PvP Game Started!</b> {chal['emoji']}\n\n"
+                f"👥 <b>Players:</b> {chal['challenger_mention']} vs {clicker_mention}\n"
+                f"💰 <b>Total Pot:</b> ₹{bet * 2:.2f}\n"
+                f"🔄 <b>Round 1 of {chal['rounds']}</b>\n\n"
+                f"👉 {chal['challenger_mention']}, send <b>{chal['emoji']}</b> now! (120s limit)",
+                chal['chat_id'],
+                call.message.message_id,
+                parse_mode="HTML"
             )
-            bot.edit_message_text(start_msg, call.message.chat.id, call.message.message_id, parse_mode="HTML")
+
+            # Start AFK Timer for Turn 1
+            start_afk_timer(bot, game_id)
 
         except Exception as e:
             print(f"[PvP Callback Error]: {e}")
 
+    # ------------------------------------------------------------------
+    # 3. DICE/EMOJI ROLL LISTENER
+    # ------------------------------------------------------------------
     @bot.message_handler(content_types=["dice"])
-    def handle_pvp_dice_roll(message):
-        try:
-            telegram_id = message.from_user.id
+    def handle_dice_roll(message):
+        uid = message.from_user.id
 
-            # Find matching active PvP game
-            game_id = None
-            game = None
-            for gid, gdata in ACTIVE_PVP_GAMES.items():
-                if telegram_id in (gdata["p1_id"], gdata["p2_id"]):
-                    game_id = gid
-                    game = gdata
-                    break
-
-            if not game or message.dice.emoji != game["emoji"]:
+        # --- PROCESS VS BOT GAME ---
+        if uid in ACTIVE_BOT_GAMES:
+            game = ACTIVE_BOT_GAMES[uid]
+            if message.dice.emoji != game["emoji"]:
                 return
 
-            if telegram_id != game["current_turn"]:
-                bot.reply_to(message, "⚠️ It's not your turn!")
-                return
+            u_val = message.dice.value
+            bot_msg = bot.send_dice(message.chat.id, emoji=game["emoji"])
+            b_val = bot_msg.dice.value
 
-            val = message.dice.value
-            is_p1 = telegram_id == game["p1_id"]
+            time.sleep(2)  # Wait for animation
 
-            if is_p1:
-                game["p1_score"] += val
-                game["current_turn"] = game["p2_id"]
-                p2_tag = f"<a href='tg://user?id={game['p2_id']}'>{html.escape(game['p2_name'])}</a>"
+            if u_val > b_val:
+                game["user_wins"] += 1
+                res = "You won this round! 🎉"
+            elif b_val > u_val:
+                game["bot_wins"] += 1
+                res = "Bot won this round! 🤖"
+            else:
+                res = "It's a tie round! 🤝"
+
+            # Check if game finishes
+            req_wins = (game["rounds"] // 2) + 1
+            if game["rounds"] == 1 or game["user_wins"] == req_wins or game["bot_wins"] == req_wins:
+                finish_bot_game(bot, uid, game, u_val, b_val)
+            else:
+                game["current_round"] += 1
                 bot.send_message(
                     message.chat.id,
-                    f"🎲 <b>{html.escape(game['p1_name'])}</b> rolled: <b>{val}</b>\n\n👉 {p2_tag}, your turn! Send <b>{game['emoji']}</b>.",
-                    parse_mode="HTML",
+                    f"📊 {game['user_mention']}, Round Result:\n"
+                    f"You: <b>{u_val}</b> | Bot: <b>{b_val}</b> — {res}\n\n"
+                    f"<b>Score:</b> You {game['user_wins']} - {game['bot_wins']} Bot\n"
+                    f"👉 Send <b>{game['emoji']}</b> for Round {game['current_round']}!",
+                    parse_mode="HTML"
                 )
-            else:
-                game["p2_score"] += val
-                
-                # Check if more rounds remain
-                if game["current_round"] < game["rounds"]:
-                    game["current_round"] += 1
-                    game["current_turn"] = game["p1_id"]
-                    p1_tag = f"<a href='tg://user?id={game['p1_id']}'>{html.escape(game['p1_name'])}</a>"
-                    bot.send_message(
-                        message.chat.id,
-                        f"🎲 <b>{html.escape(game['p2_name'])}</b> rolled: <b>{val}</b>\n\n"
-                        f"📊 <b>Scores after Round {game['current_round']-1}:</b>\n"
-                        f"• {game['p1_name']}: {game['p1_score']}\n"
-                        f"• {game['p2_name']}: {game['p2_score']}\n\n"
-                        f"👉 Round {game['current_round']}! {p1_tag}, send <b>{game['emoji']}</b>.",
-                        parse_mode="HTML",
-                    )
-                else:
-                    # Game Finished - Calculate Winner
-                    p1_score = game["p1_score"]
-                    p2_score = game["p2_score"]
-                    pot = game["bet_amount"] * 2
+            return
 
-                    if p1_score > p2_score:
-                        adjust_balance(game["p1_id"], pot)
-                        winner_text = f"🏆 <b>{html.escape(game['p1_name'])} WINS ₹{pot:.2f}!</b> 🎉"
-                    elif p2_score > p1_score:
-                        adjust_balance(game["p2_id"], pot)
-                        winner_text = f"🏆 <b>{html.escape(game['p2_name'])} WINS ₹{pot:.2f}!</b> 🎉"
-                    else:
-                        # Tie - Refund both
-                        adjust_balance(game["p1_id"], game["bet_amount"])
-                        adjust_balance(game["p2_id"], game["bet_amount"])
-                        winner_text = "🤝 <b>IT'S A DRAW!</b> Stakes have been refunded to both players."
+        # --- PROCESS PVP GAME ---
+        pvp_game = None
+        for g in ACTIVE_PVP_GAMES.values():
+            if uid in (g["p1_id"], g["p2_id"]):
+                pvp_game = g
+                break
 
-                    res_msg = (
-                        f"🏁 <b>GAME OVER!</b> {game['emoji']}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"👤 <b>{html.escape(game['p1_name'])} Score:</b> {p1_score}\n"
-                        f"👤 <b>{html.escape(game['p2_name'])} Score:</b> {p2_score}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-                        f"{winner_text}"
-                    )
-                    bot.send_message(message.chat.id, res_msg, parse_mode="HTML")
-                    del ACTIVE_PVP_GAMES[game_id]
+        if not pvp_game or message.dice.emoji != pvp_game["emoji"]:
+            return
 
-        except Exception as e:
-            print(f"[PvP Dice Handler Error]: {e}")
+        if uid != pvp_game["current_turn"]:
+            bot.reply_to(message, f"⚠️ {get_mention(message.from_user)}, it's not your turn!", parse_mode="HTML")
+            return
+
+        # Reset AFK Timer on valid roll
+        cancel_afk_timer(pvp_game["game_id"])
+
+        if uid == pvp_game["p1_id"]:
+            pvp_game["p1_roll"] = message.dice.value
+            pvp_game["current_turn"] = pvp_game["p2_id"]
+            bot.send_message(
+                message.chat.id,
+                f"{pvp_game['p1_mention']} rolled: <b>{message.dice.value}</b>\n\n"
+                f"👉 {pvp_game['p2_mention']}, send <b>{pvp_game['emoji']}</b> now! (120s limit)",
+                parse_mode="HTML"
+            )
+            start_afk_timer(bot, pvp_game["game_id"])
+        else:
+            pvp_game["p2_roll"] = message.dice.value
+            process_pvp_round(bot, pvp_game)
+
+
+# ----------------------------------------------------------------------
+# HELPER FUNCTIONS & GAME LOGIC
+# ----------------------------------------------------------------------
+def finish_bot_game(bot, uid, game, u_val, b_val):
+    pot = game["bet_amount"] * 2
+    um = game["user_mention"]
+
+    if game["user_wins"] > game["bot_wins"]:
+        adjust_balance(uid, pot)
+        msg = f"🏆 <b>YOU WIN!</b> {um}\nFinal Score: You <b>{u_val}</b> vs Bot <b>{b_val}</b>\n💰 Won: ₹{pot:.2f}"
+    elif game["bot_wins"] > game["user_wins"]:
+        msg = f"💀 <b>YOU LOST!</b> {um}\nFinal Score: You <b>{u_val}</b> vs Bot <b>{b_val}</b>\n💸 Lost: ₹{game['bet_amount']:.2f}"
+    else:
+        # Tie-breaker logic (Tie in 1 round = refund)
+        adjust_balance(uid, game["bet_amount"])
+        msg = f"🤝 <b>IT'S A DRAW!</b> {um}\nScore: <b>{u_val}</b> vs <b>{b_val}</b>\nStakes refunded."
+
+    bot.send_message(game["chat_id"], msg, parse_mode="HTML")
+    del ACTIVE_BOT_GAMES[uid]
+
+
+def process_pvp_round(bot, game):
+    p1_r = game["p1_roll"]
+    p2_r = game["p2_roll"]
+
+    if p1_r > p2_r:
+        game["p1_wins"] += 1
+        r_res = f"{game['p1_mention']} wins this round!"
+    elif p2_r > p1_r:
+        game["p2_wins"] += 1
+        r_res = f"{game['p2_mention']} wins this round!"
+    else:
+        r_res = "Round Draw!"
+
+    # Reset round rolls
+    game["p1_roll"] = None
+    game["p2_roll"] = None
+
+    req_wins = (game["rounds"] // 2) + 1
+    is_last = (game["current_round"] >= game["rounds"])
+
+    if game["p1_wins"] == req_wins or game["p2_wins"] == req_wins or (is_last and game["p1_wins"] != game["p2_wins"]):
+        finish_pvp_game(bot, game)
+    elif is_last and game["p1_wins"] == game["p2_wins"]:
+        # Tie Breaker Round!
+        game["current_turn"] = game["p1_id"]
+        bot.send_message(
+            game["chat_id"],
+            f"⚖️ <b>TIE! Playing 1 Extra Tie-Breaker Round!</b>\n\n"
+            f"👉 {game['p1_mention']}, send <b>{game['emoji']}</b>!",
+            parse_mode="HTML"
+        )
+        start_afk_timer(bot, game["game_id"])
+    else:
+        game["current_round"] += 1
+        game["current_turn"] = game["p1_id"]
+        bot.send_message(
+            game["chat_id"],
+            f"📊 <b>Round {game['current_round'] - 1} Complete!</b>\n"
+            f"{game['p1_mention']}: {p1_r} | {game['p2_mention']}: {p2_r} ({r_res})\n\n"
+            f"👉 {game['p1_mention']}, send <b>{game['emoji']}</b> for Round {game['current_round']}!",
+            parse_mode="HTML"
+        )
+        start_afk_timer(bot, game["game_id"])
+
+
+def finish_pvp_game(bot, game):
+    tot_pot = game["bet_amount"] * 2
+
+    if game["p1_wins"] > game["p2_wins"]:
+        adjust_balance(game["p1_id"], tot_pot)
+        winner_text = f"🏆 {game['p1_mention']} WINS ₹{tot_pot:.2f}!"
+    elif game["p2_wins"] > game["p1_wins"]:
+        adjust_balance(game["p2_id"], tot_pot)
+        winner_text = f"🏆 {game['p2_mention']} WINS ₹{tot_pot:.2f}!"
+    else:
+        adjust_balance(game["p1_id"], game["bet_amount"])
+        adjust_balance(game["p2_id"], game["bet_amount"])
+        winner_text = "🤝 It's a DRAW! Both stakes refunded."
+
+    res_msg = (
+        f"🏁 <b>GAME OVER!</b> {game['emoji']}\n\n"
+        f"👤 {game['p1_mention']} Wins: <b>{game['p1_wins']}</b>\n"
+        f"👤 {game['p2_mention']} Wins: <b>{game['p2_wins']}</b>\n\n"
+        f"{winner_text}"
+    )
+    bot.send_message(game["chat_id"], res_msg, parse_mode="HTML")
+    del ACTIVE_PVP_GAMES[game["game_id"]]
+
+
+# ----------------------------------------------------------------------
+# 4. AFK TIMEOUT HANDLER (120 SECONDS)
+# ----------------------------------------------------------------------
+def start_afk_timer(bot, game_id):
+    cancel_afk_timer(game_id)
+    t = threading.Timer(120.0, handle_afk_timeout, args=[bot, game_id])
+    TIMERS[game_id] = t
+    t.start()
+
+
+def cancel_afk_timer(game_id):
+    if game_id in TIMERS:
+        TIMERS[game_id].cancel()
+        del TIMERS[game_id]
+
+
+def handle_afk_timeout(bot, game_id):
+    if game_id not in ACTIVE_PVP_GAMES:
+        return
+
+    game = ACTIVE_PVP_GAMES[game_id]
+    afk_id = game["current_turn"]
+
+    if afk_id == game["p1_id"]:
+        afk_mention = game["p1_mention"]
+        winner_id = game["p2_id"]
+        winner_mention = game["p2_mention"]
+    else:
+        afk_mention = game["p2_mention"]
+        winner_id = game["p1_id"]
+        winner_mention = game["p1_mention"]
+
+    total_pot = game["bet_amount"] * 2
+    winner_share = total_pot * 0.50  # 50% to winner, 50% retained by house
+
+    adjust_balance(winner_id, winner_share)
+
+    bot.send_message(
+        game["chat_id"],
+        f"⏰ <b>TIMEOUT AFK FORFEIT!</b>\n\n"
+        f"❌ {afk_mention} took longer than 120s to roll and forfeits!\n"
+        f"🏆 {winner_mention} wins <b>₹{winner_share:.2f}</b> (50% share).\n"
+        f"🏛️ <b>₹{winner_share:.2f}</b> goes to House penalty fee.",
+        parse_mode="HTML"
+    )
+
+    del ACTIVE_PVP_GAMES[game_id]
+    cancel_afk_timer(game_id)
