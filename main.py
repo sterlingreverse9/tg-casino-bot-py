@@ -3,6 +3,8 @@ from bot_instance import bot
 from wallet import get_balance
 
 # Importing handlers
+# Add this import near the top of main.py
+import handlers.codes
 import handlers.basic
 import handlers.admin
 import handlers.rain
