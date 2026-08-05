@@ -1,4 +1,11 @@
 import asyncio
+
+# Fix Python 3.14 missing event loop error on Pyrogram import
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
 import time
 from pyrogram import Client, filters, errors
 from promo_db import get_accounts, get_groups, get_setting, can_dm_user, record_dm, update_casino_members
@@ -65,7 +72,6 @@ async def process_message(client, message):
     if not msg_to_send:
         return
 
-    # Attempt DM sending with smart rotation on FloodWait
     for _ in range(len(clients)):
         active_cli = get_active_client()
         if not active_cli:
@@ -85,12 +91,11 @@ async def process_message(client, message):
 async def start_promo_engine():
     await init_clients()
     if not clients:
-        print("No userbot accounts loaded.")
+        print("No userbot accounts loaded. Add an account using /promote in DM first.")
         return
 
     asyncio.create_task(sync_casino_members_loop())
 
-    # Auto join target groups
     target_groups = get_groups()
     for cli in clients:
         for grp in target_groups:
@@ -99,7 +104,6 @@ async def start_promo_engine():
             except Exception:
                 pass
 
-    # Register event listeners
     @Client.on_message(filters.group)
     async def group_listener(cli, msg):
         target_groups = get_groups()
