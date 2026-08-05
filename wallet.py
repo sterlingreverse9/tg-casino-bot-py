@@ -13,6 +13,12 @@ def get_or_create_user(telegram_id: int, username):
         "username": username,
         "balance": round(STARTING_BALANCE, 2),
         "wager_remaining": 0.0,
+        "total_wagered": 0.0,
+        "total_won": 0.0,
+        "total_lost": 0.0,
+        "rakeback_balance": 0.0,
+        "referral_balance": 0.0,
+        "referral_total_earned": 0.0,
     })
 
 
@@ -26,8 +32,55 @@ def get_wager_remaining(telegram_id: int) -> float:
     return round(float(user.get("wager_remaining", 0.0)), 2) if user else 0.0
 
 
+def get_wagered(telegram_id: int) -> float:
+    """Helper to get total wagered amount for profile cards."""
+    user = select("users", filters={"telegram_id": telegram_id}, single=True)
+    return round(float(user.get("total_wagered", 0.0)), 2) if user else 0.0
+
+
+def get_user_stats(telegram_id: int) -> dict:
+    """Fetches full user betting statistics for dashboard and profile cards."""
+    user = select("users", filters={"telegram_id": telegram_id}, single=True)
+    if not user:
+        return {
+            "balance": 0.0,
+            "total_wagered": 0.0,
+            "total_won": 0.0,
+            "total_lost": 0.0,
+            "wager_remaining": 0.0,
+            "rakeback_balance": 0.0,
+            "vip_level": "Iron"
+        }
+
+    wagered = float(user.get("total_wagered", 0.0))
+    
+    # VIP Tier Calculation
+    if wagered >= 50000:
+        vip = "Diamond"
+    elif wagered >= 20000:
+        vip = "Gold"
+    elif wagered >= 5000:
+        vip = "Silver"
+    elif wagered >= 1000:
+        vip = "Bronze"
+    else:
+        vip = "Iron"
+
+    return {
+        "balance": round(float(user.get("balance", 0.0)), 2),
+        "total_wagered": round(wagered, 2),
+        "total_won": round(float(user.get("total_won", 0.0)), 2),
+        "total_lost": round(float(user.get("total_lost", 0.0)), 2),
+        "wager_remaining": round(float(user.get("wager_remaining", 0.0)), 2),
+        "rakeback_balance": round(float(user.get("rakeback_balance", 0.0)), 2),
+        "vip_level": vip
+    }
+
+
 def adjust_balance(telegram_id: int, delta: float) -> float:
     user = select("users", filters={"telegram_id": telegram_id}, single=True)
+    if not user:
+        user = get_or_create_user(telegram_id, None)
     new_balance = round(float(user["balance"]) + delta, 2)
     update("users", {"telegram_id": telegram_id}, {"balance": new_balance})
     return new_balance
@@ -57,22 +110,23 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
     new_wager = max(0.0, round(current_wager - bet_amount, 2))
 
     update("users", {"telegram_id": telegram_id}, {
-        "total_wagered": round(float(user.get("total_wagered", 0)) + bet_amount, 2),
-        "total_won": round(float(user.get("total_won", 0)) + (payout if result == "win" else 0), 2),
-        "total_lost": round(float(user.get("total_lost", 0)) + (bet_amount if result == "loss" else 0), 2),
+        "total_wagered": round(float(user.get("total_wagered", 0.0)) + bet_amount, 2),
+        "total_won": round(float(user.get("total_won", 0.0)) + (payout if result == "win" else 0.0), 2),
+        "total_lost": round(float(user.get("total_lost", 0.0)) + (bet_amount if result == "loss" else 0.0), 2),
         "wager_remaining": new_wager
     })
 
     house_delta = -(payout - bet_amount) if result == "win" else bet_amount
     house = select("house", filters={"id": 1}, single=True)
-    update("house", {"id": 1}, {"balance": round(float(house["balance"]) + house_delta, 2)})
+    if house:
+        update("house", {"id": 1}, {"balance": round(float(house["balance"]) + house_delta, 2)})
 
     if result == "loss":
         BASE_RAKEBACK_RATE = 0.005
         rakeback_earned = round(bet_amount * BASE_RAKEBACK_RATE, 2)
         if rakeback_earned > 0:
             update("users", {"telegram_id": telegram_id}, {
-                "rakeback_balance": round(float(user.get("rakeback_balance", 0)) + rakeback_earned, 2),
+                "rakeback_balance": round(float(user.get("rakeback_balance", 0.0)) + rakeback_earned, 2),
             })
 
     if result == "loss" and user.get("referred_by"):
@@ -83,8 +137,8 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
             referrer = select("users", filters={"telegram_id": referrer_id}, single=True)
             if referrer:
                 update("users", {"telegram_id": referrer_id}, {
-                    "referral_balance": round(float(referrer.get("referral_balance", 0)) + earning, 2),
-                    "referral_total_earned": round(float(referrer.get("referral_total_earned", 0)) + earning, 2),
+                    "referral_balance": round(float(referrer.get("referral_balance", 0.0)) + earning, 2),
+                    "referral_total_earned": round(float(referrer.get("referral_total_earned", 0.0)) + earning, 2),
                 })
 
 
