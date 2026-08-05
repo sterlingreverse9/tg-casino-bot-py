@@ -1,4 +1,5 @@
 import html
+import traceback
 
 # Core bot configuration & instance
 from config import CASINO_NAME
@@ -27,13 +28,22 @@ import handlers.referral
 import handlers.tracking
 import handlers.broadcast
 
-# --- OVERRIDE ANY DUPES & FORCE HIGH-PRIORITY BALANCE HANDLER ---
-# Remove any balance/bal handlers imported from other modules to avoid collisions
-bot.message_handlers = [
-    h for h in bot.message_handlers 
-    if not (hasattr(h, 'filters') and any('balance' in f or 'bal' in f for f in h.get('commands', [])))
-]
+# --- SAFELY REMOVE DUPLICATE BALANCE HANDLERS ---
+cleaned_handlers = []
+for h in bot.message_handlers:
+    is_bal_cmd = False
+    filters = h.get('filters', {})
+    if isinstance(filters, dict) and 'commands' in filters:
+        cmds = filters['commands']
+        if any(c in ['balance', 'bal'] for c in cmds):
+            is_bal_cmd = True
+    if not is_bal_cmd:
+        cleaned_handlers.append(h)
 
+bot.message_handlers = cleaned_handlers
+
+
+# --- HIGH-PRIORITY BALANCE CARD HANDLER ---
 @bot.message_handler(commands=["balance", "bal"])
 def cmd_show_balance(message):
     try:
@@ -51,8 +61,8 @@ def cmd_show_balance(message):
                 file_id = photos.photos[0][-1].file_id
                 file_info = bot.get_file(file_id)
                 avatar_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
-        except Exception:
-            pass
+        except Exception as avatar_err:
+            print(f"⚠️ Avatar fetch warning: {avatar_err}")
 
         # Generate Image Card
         photo_bytes = generate_balance_card(
@@ -72,7 +82,10 @@ def cmd_show_balance(message):
             reply_to_message_id=message.message_id
         )
     except Exception as e:
-        print(f"Error in /balance image handler: {e}")
+        print("\n❌ --- BALANCE CARD ERROR TRACEBACK ---")
+        traceback.print_exc()
+        print("---------------------------------------\n")
+        bot.reply_to(message, f"❌ Failed to generate card: {str(e)}")
 
 
 # --- Restrict /checkbal command strictly to @mrpuppyx ---
