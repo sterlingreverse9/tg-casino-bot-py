@@ -44,7 +44,7 @@ def cmd_show_balance(message):
         bot.send_photo(
             chat_id=chat_id,
             photo=photo_bytes,
-            caption=f"💳 <b>Wallet Details for {html.escape(user.first_name or 'Player')}</b>",
+            caption=f"💰 <b>Your balance: ₹{user_balance:.2f}</b>",
             parse_mode="HTML",
             reply_to_message_id=message.message_id
         )
