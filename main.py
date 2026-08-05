@@ -4,9 +4,53 @@ import html
 from config import CASINO_NAME
 from bot_instance import bot
 
-# Wallet & Explicit Handlers
+# Wallet & Dynamic Cards
 from wallet import get_balance, setup_secret_wallet_handlers
+from balance_card import generate_balance_card
 from handlers.dice_duel import setup_dice_handlers
+
+
+# --- High-Priority Image Balance Handler ---
+@bot.message_handler(commands=["balance", "bal"])
+def cmd_show_balance(message):
+    try:
+        user = message.from_user
+        chat_id = message.chat.id
+        telegram_id = user.id
+
+        user_balance = float(get_balance(telegram_id))
+
+        # Fetch Telegram profile avatar
+        avatar_url = None
+        try:
+            photos = bot.get_user_profile_photos(telegram_id, limit=1)
+            if photos.total_count > 0:
+                file_id = photos.photos[0][-1].file_id
+                file_info = bot.get_file(file_id)
+                avatar_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+        except Exception:
+            pass
+
+        # Generate Image Card
+        photo_bytes = generate_balance_card(
+            user_id=telegram_id,
+            username=user.username,
+            display_name=user.first_name or "Player",
+            balance=user_balance,
+            casino_name=CASINO_NAME if 'CASINO_NAME' in globals() else "THE CASINO",
+            avatar_url=avatar_url
+        )
+
+        bot.send_photo(
+            chat_id=chat_id,
+            photo=photo_bytes,
+            caption=f"💳 <b>Wallet Details for {html.escape(user.first_name or 'Player')}</b>",
+            parse_mode="HTML",
+            reply_to_message_id=message.message_id
+        )
+    except Exception as e:
+        print(f"Error in /balance image handler: {e}")
+
 
 # Register Priority Handlers First (Dice/PvP & Wallet)
 setup_secret_wallet_handlers(bot)
