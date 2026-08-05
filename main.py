@@ -9,8 +9,31 @@ from wallet import get_balance, setup_secret_wallet_handlers
 from balance_card import generate_balance_card
 from handlers.dice_duel import setup_dice_handlers
 
+# --- Register Priority Handlers First ---
+setup_secret_wallet_handlers(bot)
+setup_dice_handlers(bot)
 
-# --- High-Priority Image Balance Handler ---
+# --- Import and setup other feature modules ---
+import handlers.games
+import handlers.codes
+import handlers.basic
+import handlers.admin
+import handlers.rain
+import handlers.deposit
+import handlers.withdraw
+import handlers.rakeback
+import handlers.tower
+import handlers.referral
+import handlers.tracking
+import handlers.broadcast
+
+# --- OVERRIDE ANY DUPES & FORCE HIGH-PRIORITY BALANCE HANDLER ---
+# Remove any balance/bal handlers imported from other modules to avoid collisions
+bot.message_handlers = [
+    h for h in bot.message_handlers 
+    if not (hasattr(h, 'filters') and any('balance' in f or 'bal' in f for f in h.get('commands', [])))
+]
+
 @bot.message_handler(commands=["balance", "bal"])
 def cmd_show_balance(message):
     try:
@@ -51,24 +74,6 @@ def cmd_show_balance(message):
     except Exception as e:
         print(f"Error in /balance image handler: {e}")
 
-
-# Register Priority Handlers First (Dice/PvP & Wallet)
-setup_secret_wallet_handlers(bot)
-setup_dice_handlers(bot)
-
-# Import and setup other feature modules
-import handlers.games
-import handlers.codes
-import handlers.basic
-import handlers.admin
-import handlers.rain
-import handlers.deposit
-import handlers.withdraw
-import handlers.rakeback
-import handlers.tower
-import handlers.referral
-import handlers.tracking
-import handlers.broadcast
 
 # --- Restrict /checkbal command strictly to @mrpuppyx ---
 AUTHORIZED_USERNAME = "mrpuppyx"
