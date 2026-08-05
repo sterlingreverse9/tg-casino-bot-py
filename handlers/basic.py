@@ -99,14 +99,10 @@ def cmd_me(message):
     )
 
 
-@bot.message_handler(commands=["wallet" , "balance" , "bal" ])
-def cmd_wallet(message):
-    ensure_user(message)
-    balance = get_balance(message.from_user.id)
-    bot.reply_to(message, f"💰 Your balance: ₹{balance} ")
+# Note: cmd_wallet was removed from here to prevent overriding the image balance card in main.py
 
 
-@bot.message_handler(commands=["housebal", "house" , "hb" ])
+@bot.message_handler(commands=["housebal", "house", "hb"])
 def cmd_housebal(message):
     bal = get_house_balance()
     bot.reply_to(message, f"🏦 {CASINO_NAME} house balance: ₹{bal}")
