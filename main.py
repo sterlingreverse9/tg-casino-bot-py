@@ -10,38 +10,6 @@ from wallet import get_balance, setup_secret_wallet_handlers
 from balance_card import generate_balance_card
 from handlers.dice_duel import setup_dice_handlers
 
-# --- Register Priority Handlers First ---
-setup_secret_wallet_handlers(bot)
-setup_dice_handlers(bot)
-
-# --- Import and setup other feature modules ---
-import handlers.games
-import handlers.codes
-import handlers.basic
-import handlers.admin
-import handlers.rain
-import handlers.deposit
-import handlers.withdraw
-import handlers.rakeback
-import handlers.tower
-import handlers.referral
-import handlers.tracking
-import handlers.broadcast
-
-# --- SAFELY REMOVE DUPLICATE BALANCE HANDLERS ---
-cleaned_handlers = []
-for h in bot.message_handlers:
-    is_bal_cmd = False
-    filters = h.get('filters', {})
-    if isinstance(filters, dict) and 'commands' in filters:
-        cmds = filters['commands']
-        if any(c in ['balance', 'bal'] for c in cmds):
-            is_bal_cmd = True
-    if not is_bal_cmd:
-        cleaned_handlers.append(h)
-
-bot.message_handlers = cleaned_handlers
-
 
 # --- HIGH-PRIORITY BALANCE CARD HANDLER ---
 @bot.message_handler(commands=["balance", "bal"])
@@ -82,10 +50,29 @@ def cmd_show_balance(message):
             reply_to_message_id=message.message_id
         )
     except Exception as e:
-        print("\n❌ --- BALANCE CARD ERROR TRACEBACK ---")
+        print("\n❌ --- BALANCE CARD ERROR ---")
         traceback.print_exc()
-        print("---------------------------------------\n")
-        bot.reply_to(message, f"❌ Failed to generate card: {str(e)}")
+        print("----------------------------\n")
+        bot.reply_to(message, f"❌ Error loading balance card: {str(e)}")
+
+
+# Register Priority Handlers
+setup_secret_wallet_handlers(bot)
+setup_dice_handlers(bot)
+
+# --- Import other handlers AFTER defining /bal ---
+import handlers.games
+import handlers.codes
+import handlers.basic
+import handlers.admin
+import handlers.rain
+import handlers.deposit
+import handlers.withdraw
+import handlers.rakeback
+import handlers.tower
+import handlers.referral
+import handlers.tracking
+import handlers.broadcast
 
 
 # --- Restrict /checkbal command strictly to @mrpuppyx ---
