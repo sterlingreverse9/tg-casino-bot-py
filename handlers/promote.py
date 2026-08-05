@@ -1,3 +1,11 @@
+import asyncio
+
+# Fix Python 3.14 missing event loop error
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
 from telebot import types
 from bot_instance import bot
 from pyrogram import Client
@@ -156,7 +164,6 @@ def process_promote_inputs(message):
         phone = f"+91{raw_phone}" if len(raw_phone) == 10 and raw_phone.isdigit() else f"+{raw_phone}"
         state["phone"] = phone
 
-        # Init Pyrogram Client to send OTP
         try:
             temp_cli = Client(f"temp_{phone}", api_id=state["api_id"], api_hash=state["api_hash"], in_memory=True)
             temp_cli.connect()
@@ -164,7 +171,7 @@ def process_promote_inputs(message):
             state["client"] = temp_cli
             state["phone_code_hash"] = sent_code.phone_code_hash
             state["step"] = "OTP"
-            bot.send_message(chat_id, f"📩 OTP sent to <code>{phone}</code>. Enter code:")
+            bot.send_message(chat_id, f"📩 OTP sent to <code>{phone}</code>. Enter code:", parse_mode="HTML")
         except Exception as e:
             bot.send_message(chat_id, f"❌ Failed to send OTP: {e}")
             del USER_STATES[chat_id]
