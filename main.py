@@ -1,3 +1,23 @@
+import asyncio
+
+# Python 3.14 Pyrogram compatibility patch
+_orig_get_event_loop = asyncio.get_event_loop
+
+
+def _get_event_loop():
+    try:
+        return _orig_get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+
+asyncio.get_event_loop = _get_event_loop
+
+# --- ALL YOUR EXISTING IMPORTS BELOW THIS LINE ---
+import handlers.promote
+# ... rest of main.py
 import html
 import traceback
 
