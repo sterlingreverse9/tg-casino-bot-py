@@ -4,7 +4,8 @@ import traceback
 # Core bot configuration & instance
 from config import CASINO_NAME
 from bot_instance import bot
-
+# Add this import line near your other handler imports in main.py
+import handlers.pvp_game
 # Wallet & Dynamic Cards
 from wallet import get_balance, setup_secret_wallet_handlers
 from balance_card import generate_balance_card
