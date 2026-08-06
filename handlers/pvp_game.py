@@ -8,7 +8,7 @@ from helpers import ensure_user
 from pvp_state import create_challenge, get_challenge, remove_challenge
 
 RIG_GROUP = "@thecassinorigpvt"
-HOUSE_EDGE = 0.05  # 5% house edge
+HOUSE_EDGE = 0.20  # 5% house edge
 PVP_TIMEOUT = 120  # 120 seconds auto-cancel
 FORCE_RIG_USERS = {}  # {user_id: "win" | "lose"}
 
