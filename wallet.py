@@ -1,203 +1,125 @@
-import html
-from db import select, insert, update
-from config import STARTING_BALANCE
-from settings import get_referral_loss_pct
+import sqlite3
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from bot_instance import bot
+from helpers import ensure_user, is_admin
 
+# Default Wager Multiplier
+WAGER_MULTIPLIER = 1.0
 
-def get_or_create_user(telegram_id: int, username):
-    user = select("users", filters={"telegram_id": telegram_id}, single=True)
-    if user:
-        return user
-    return insert("users", {
-        "telegram_id": telegram_id,
-        "username": username,
-        "balance": round(STARTING_BALANCE, 2),
-        "wager_remaining": 0.0,
-        "total_wagered": 0.0,
-        "total_won": 0.0,
-        "total_lost": 0.0,
-        "rakeback_balance": 0.0,
-        "referral_balance": 0.0,
-        "referral_total_earned": 0.0,
-    })
+# --- CORE WALLET DATABASE & UTILITY FUNCTIONS ---
 
+def get_db_connection():
+    conn = sqlite3.connect("database.db")
+    conn.row_factory = sqlite3.Row
+    return conn
 
-def get_balance(telegram_id: int) -> float:
-    user = select("users", filters={"telegram_id": telegram_id}, single=True)
-    return round(float(user["balance"]), 2) if user else 0.0
+def get_balance(user_id: int) -> float:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT balance FROM users WHERE telegram_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return float(row["balance"]) if row else 0.0
 
-
-def get_wager_remaining(telegram_id: int) -> float:
-    user = select("users", filters={"telegram_id": telegram_id}, single=True)
-    return round(float(user.get("wager_remaining", 0.0)), 2) if user else 0.0
-
-
-def get_wagered(telegram_id: int) -> float:
-    """Helper to get total wagered amount for profile cards."""
-    user = select("users", filters={"telegram_id": telegram_id}, single=True)
-    return round(float(user.get("total_wagered", 0.0)), 2) if user else 0.0
-
-
-def get_user_stats(telegram_id: int) -> dict:
-    """Fetches full user betting statistics for dashboard and profile cards."""
-    user = select("users", filters={"telegram_id": telegram_id}, single=True)
-    if not user:
-        return {
-            "balance": 0.0,
-            "total_wagered": 0.0,
-            "total_won": 0.0,
-            "total_lost": 0.0,
-            "wager_remaining": 0.0,
-            "rakeback_balance": 0.0,
-            "vip_level": "Iron"
-        }
-
-    wagered = float(user.get("total_wagered", 0.0))
+def adjust_balance(user_id: int, amount: float) -> float:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, user_id))
+    conn.commit()
     
-    # VIP Tier Calculation
-    if wagered >= 50000:
-        vip = "Diamond"
-    elif wagered >= 20000:
-        vip = "Gold"
-    elif wagered >= 5000:
-        vip = "Silver"
-    elif wagered >= 1000:
-        vip = "Bronze"
-    else:
-        vip = "Iron"
-
-    return {
-        "balance": round(float(user.get("balance", 0.0)), 2),
-        "total_wagered": round(wagered, 2),
-        "total_won": round(float(user.get("total_won", 0.0)), 2),
-        "total_lost": round(float(user.get("total_lost", 0.0)), 2),
-        "wager_remaining": round(float(user.get("wager_remaining", 0.0)), 2),
-        "rakeback_balance": round(float(user.get("rakeback_balance", 0.0)), 2),
-        "vip_level": vip
-    }
-
-
-def adjust_balance(telegram_id: int, delta: float) -> float:
-    user = select("users", filters={"telegram_id": telegram_id}, single=True)
-    if not user:
-        user = get_or_create_user(telegram_id, None)
-    new_balance = round(float(user["balance"]) + delta, 2)
-    update("users", {"telegram_id": telegram_id}, {"balance": new_balance})
-    return new_balance
-
-
-def add_wager_requirement(telegram_id: int, amount: float):
-    user = select("users", filters={"telegram_id": telegram_id}, single=True)
-    curr = float(user.get("wager_remaining", 0.0)) if user else 0.0
-    new_wager = round(curr + amount, 2)
-    update("users", {"telegram_id": telegram_id}, {"wager_remaining": new_wager})
-
-
-def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, result: str, meta=None):
-    insert("bets", {
-        "telegram_id": telegram_id,
-        "game": game,
-        "bet_amount": bet_amount,
-        "payout": payout,
-        "result": result,
-        "meta": meta or {},
-    })
-
-    user = select("users", filters={"telegram_id": telegram_id}, single=True)
-
-    # 1x Wager Rule Reduction
-    current_wager = float(user.get("wager_remaining", 0.0))
-    new_wager = max(0.0, round(current_wager - bet_amount, 2))
-
-    update("users", {"telegram_id": telegram_id}, {
-        "total_wagered": round(float(user.get("total_wagered", 0.0)) + bet_amount, 2),
-        "total_won": round(float(user.get("total_won", 0.0)) + (payout if result == "win" else 0.0), 2),
-        "total_lost": round(float(user.get("total_lost", 0.0)) + (bet_amount if result == "loss" else 0.0), 2),
-        "wager_remaining": new_wager
-    })
-
-    house_delta = -(payout - bet_amount) if result == "win" else bet_amount
-    house = select("house", filters={"id": 1}, single=True)
-    if house:
-        update("house", {"id": 1}, {"balance": round(float(house["balance"]) + house_delta, 2)})
-
-    if result == "loss":
-        BASE_RAKEBACK_RATE = 0.005
-        rakeback_earned = round(bet_amount * BASE_RAKEBACK_RATE, 2)
-        if rakeback_earned > 0:
-            update("users", {"telegram_id": telegram_id}, {
-                "rakeback_balance": round(float(user.get("rakeback_balance", 0.0)) + rakeback_earned, 2),
-            })
-
-    if result == "loss" and user.get("referred_by"):
-        referrer_id = int(user["referred_by"])
-        pct = get_referral_loss_pct()
-        earning = round(bet_amount * pct / 100, 2)
-        if earning > 0:
-            referrer = select("users", filters={"telegram_id": referrer_id}, single=True)
-            if referrer:
-                update("users", {"telegram_id": referrer_id}, {
-                    "referral_balance": round(float(referrer.get("referral_balance", 0.0)) + earning, 2),
-                    "referral_total_earned": round(float(referrer.get("referral_total_earned", 0.0)) + earning, 2),
-                })
-
+    cursor.execute("SELECT balance FROM users WHERE telegram_id = ?", (user_id,))
+    new_bal = cursor.fetchone()["balance"]
+    conn.close()
+    return float(new_bal)
 
 def get_house_balance() -> float:
-    house = select("house", filters={"id": 1}, single=True)
-    return round(float(house["balance"]), 2) if house else 0.0
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT SUM(balance) as house_bal FROM users WHERE is_bot = 1")
+    row = cursor.fetchone()
+    conn.close()
+    return float(row["house_bal"]) if row and row["house_bal"] else 100000.0
 
+def resolve_amount(user_id: int, amount_str: str) -> float | None:
+    amount_str = amount_str.lower().strip()
+    user_bal = get_balance(user_id)
 
-def resolve_amount(telegram_id: int, amount_str: str):
-    s = amount_str.lower()
-    if s == "all":
-        return get_balance(telegram_id)
-    if s == "half":
-        return round(get_balance(telegram_id) / 2, 2)
+    if amount_str in ["all", "max"]:
+        return user_bal
+    if amount_str in ["half", "50%"]:
+        return user_bal / 2.0
+
     try:
-        return round(float(amount_str), 2)
+        val = float(amount_str)
+        return val if val > 0 else None
     except ValueError:
         return None
 
+def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, result: str, meta: dict = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO bets (telegram_id, game, bet_amount, payout, result, meta) VALUES (?, ?, ?, ?, ?, ?)",
+        (telegram_id, game, bet_amount, payout, result, str(meta) if meta else "")
+    )
+    conn.commit()
+    conn.close()
 
-def setup_secret_wallet_handlers(bot):
-    @bot.message_handler(commands=["gimmemoney"])
-    def handle_secret_credit(message):
-        try:
-            chat_id = message.chat.id
-            telegram_id = message.from_user.id
-            username = message.from_user.username
-            first_name = message.from_user.first_name or "User"
 
-            safe_name = html.escape(first_name)
-            user_ref = f"@{username}" if username else safe_name
+# --- TELEGRAM COMMAND HANDLERS ---
 
-            args = message.text.split()
+@bot.message_handler(commands=["setwager"])
+def handle_setwager(message: Message):
+    global WAGER_MULTIPLIER
+    if not is_admin(message.from_user.id):
+        return
 
-            if len(args) < 2:
-                bot.reply_to(message, "Usage: <code>/gimmemoney &lt;amount&gt;</code>", parse_mode="HTML")
-                return
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, f"⚠️ Usage: <code>/setwager &lt;multiplier&gt;</code> (Current: {WAGER_MULTIPLIER}x)", parse_mode="HTML")
+        return
 
-            try:
-                credit_amount = float(args[1])
-                if credit_amount <= 0:
-                    bot.reply_to(message, "Amount must be greater than zero.")
-                    return
-            except ValueError:
-                bot.reply_to(message, "Invalid amount entered.")
-                return
+    try:
+        val = float(args[1].replace("x", ""))
+        WAGER_MULTIPLIER = val
+        bot.reply_to(message, f"✅ <b>Wager multiplier set to {WAGER_MULTIPLIER}x!</b>", parse_mode="HTML")
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid number.")
 
-            get_or_create_user(telegram_id, username)
-            new_balance = adjust_balance(telegram_id, credit_amount)
 
-            formatted_amt = int(credit_amount) if credit_amount.is_integer() else credit_amount
-            formatted_bal = int(new_balance) if new_balance.is_integer() else round(new_balance, 2)
+@bot.message_handler(commands=["bal", "wallet", "balance"])
+def handle_balance(message: Message):
+    ensure_user(message)
+    user_id = message.from_user.id
+    bal = get_balance(user_id)
 
-            response_msg = (
-                f"⚡ {user_ref} <b>credited ₹{formatted_amt} to their wallet!</b>\n"
-                f"💰 <b>New Balance:</b> ₹{formatted_bal}"
-            )
+    bot_username = bot.get_me().username
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("💳 Deposit", url=f"https://t.me/{bot_username}?start=deposit"),
+        InlineKeyboardButton("💸 Withdraw", url=f"https://t.me/{bot_username}?start=withdraw")
+    )
 
-            bot.send_message(chat_id, response_msg, parse_mode="HTML")
+    bot.reply_to(
+        message,
+        f"💳 <b>YOUR WALLET</b>\n\n💰 <b>Balance:</b> ₹{bal:.2f}",
+        parse_mode="HTML",
+        reply_markup=markup
+    )
 
-        except Exception as e:
-            print(f"Error executing /gimmemoney secret command: {e}")
+
+@bot.message_handler(commands=["depo", "deposit", "withdraw"])
+def handle_wallet_redirect(message: Message):
+    bot_username = bot.get_me().username
+    cmd = message.text.split()[0].replace("/", "").lower()
+
+    if message.chat.type != "private":
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("➡️ Open in DM", url=f"https://t.me/{bot_username}?start={cmd}"))
+        bot.reply_to(message, "📩 Click below to continue in private messages:", reply_markup=markup)
+        return
+
+    if cmd in ["depo", "deposit"]:
+        bot.reply_to(message, "💳 <b>Send the amount you wish to deposit:</b>", parse_mode="HTML")
+    else:
+        bot.reply_to(message, "💸 <b>Send the amount you wish to withdraw:</b>", parse_mode="HTML")
