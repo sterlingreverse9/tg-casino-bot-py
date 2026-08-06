@@ -82,19 +82,21 @@ def cmd_show_balance(message):
 setup_secret_wallet_handlers(bot)
 setup_dice_handlers(bot)
 
-# --- Import other handlers AFTER defining /bal ---
-import handlers.games
-import handlers.codes
-import handlers.basic
-import handlers.admin
-import handlers.rain
+# --- Import priority interaction handlers BEFORE handlers.basic ---
 import handlers.deposit
 import handlers.withdraw
+import handlers.games
+import handlers.codes
+import handlers.admin
+import handlers.rain
 import handlers.rakeback
 import handlers.tower
 import handlers.referral
 import handlers.tracking
 import handlers.broadcast
+
+# Catch-all text handlers should be imported LAST
+import handlers.basic
 
 
 # --- Restrict /checkbal command strictly to @mrpuppyx ---
