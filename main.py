@@ -16,17 +16,17 @@ def _get_event_loop():
 asyncio.get_event_loop = _get_event_loop
 
 # --- ALL YOUR EXISTING IMPORTS BELOW THIS LINE ---
-import handlers.promote
-# ... rest of main.py
 import html
 import traceback
 
 # Core bot configuration & instance
 from config import CASINO_NAME
 from bot_instance import bot
-# Add this import line near your other handler imports in main.py
-import handlers.pvp_game
+
+# Handlers
 import handlers.promote
+import handlers.pvp_game  # <-- Registered Unified PVP / Bot / Rig Handler
+
 # Wallet & Dynamic Cards
 from wallet import get_balance, setup_secret_wallet_handlers
 from balance_card import generate_balance_card
