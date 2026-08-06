@@ -1,10 +1,10 @@
 from db import select, insert, update
 from config import HOUSE_EDGE as DEFAULT_HOUSE_EDGE
 
-DEFAULT_MIN_BET = 5
-DEFAULT_MAX_BET_PCT = 0.20  # 5% of house balance if never set
+DEFAULT_MIN_BET = 10
+DEFAULT_MAX_BET_PCT = 0.05  # 5% of house balance if never set
 DEFAULT_MIN_WITHDRAW = 100.0
-DEFAULT_HOUSE_BALANCE = 500.0  # Fallback house balance
+DEFAULT_HOUSE_BALANCE = 10000.0  # Fallback house balance
 
 
 def _get(key, default):
