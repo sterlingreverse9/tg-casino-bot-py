@@ -10,10 +10,9 @@ from db import select
 MIN_DEPOSIT_AMOUNT = 50.0
 UPI_ID = "piyushraao@fam"
 
-# Local Storage File Path Fix (Supports /sdcard/Download/ or Termux storage)
-LOCAL_QR_PATH = "/sdcard/Download/qr.jpg"  # Change to qr.jpy if your filename is literally qr.jpy
+# Local Storage File Path Fix
+LOCAL_QR_PATH = "/sdcard/Download/qr.jpg"
 if not os.path.exists(LOCAL_QR_PATH):
-    # Fallback check for alternative extension in Download folder
     alt_path = "/sdcard/Download/qr.jpy"
     if os.path.exists(alt_path):
         LOCAL_QR_PATH = alt_path
@@ -113,6 +112,28 @@ def is_deposit_allowed(telegram_id: int) -> bool:
     conn.close()
     return bool(row["allowed"]) if row else True
 
+# Dynamic Approver Logic
+def get_all_approvers():
+    import helpers
+    admin_ids = set(helpers.get_all_admin_ids())
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT telegram_id FROM deposit_permissions WHERE allowed = 1")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    for row in rows:
+        admin_ids.add(row["telegram_id"])
+        
+    return list(admin_ids)
+
+def is_approver(user_id: int) -> bool:
+    import helpers
+    if helpers.is_admin(user_id):
+        return True
+    return is_deposit_allowed(user_id)
+
 # --- COMMANDS & HANDLERS ---
 
 @bot.message_handler(commands=["depositperm", "depperm"])
@@ -121,14 +142,25 @@ def toggle_deposit_perm(message: Message):
     if not helpers.is_admin(message.from_user.id):
         return
 
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "Usage: <code>/depositperm &lt;@username/user_id&gt;</code>", parse_mode="HTML")
-        return
+    target_user_id = None
 
-    target_user_id = helpers.get_target_user(message, args[1])
+    if message.reply_to_message:
+        target_user_id = message.reply_to_message.from_user.id
+    else:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "Usage: <code>/depositperm &lt;@username/user_id&gt;</code> or reply to a message.", parse_mode="HTML")
+            return
+
+        raw_arg = args[1].strip()
+
+        if raw_arg.isdigit() or (raw_arg.startswith("-") and raw_arg[1:].isdigit()):
+            target_user_id = int(raw_arg)
+        else:
+            target_user_id = helpers.get_target_user(message, raw_arg)
+
     if not target_user_id:
-        bot.reply_to(message, "❌ User not found.")
+        bot.reply_to(message, "❌ User not found in database. Please pass numeric Telegram User ID instead.")
         return
 
     current_status = is_deposit_allowed(target_user_id)
@@ -168,7 +200,6 @@ def start_deposit(message: Message):
     )
 
 
-# Reads local poster image file directly from Download storage
 @bot.message_handler(func=lambda m: m.chat.type == "private" and get_dep_state(m.from_user.id) and get_dep_state(m.from_user.id)["state"] == "WAITING_AMOUNT")
 def process_amount(message: Message):
     if message.text.startswith("/"):
@@ -201,7 +232,7 @@ def process_amount(message: Message):
         with open(LOCAL_QR_PATH, 'rb') as photo_file:
             bot.send_photo(message.chat.id, photo=photo_file, caption=caption, parse_mode="HTML", reply_markup=markup)
     except Exception as e:
-        bot.reply_to(message, f"❌ Error loading local QR image from `{LOCAL_QR_PATH}`. Ensure termux-setup-storage is done.", parse_mode="Markdown")
+        bot.reply_to(message, f"❌ Error loading local QR image from `{LOCAL_QR_PATH}`.", parse_mode="Markdown")
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "dep_paid")
@@ -256,8 +287,7 @@ def process_screenshot(message: Message):
 
     bot.reply_to(message, "⏳ <b>Your deposit request has been sent to the admins for approval.</b>", parse_mode="HTML")
 
-    import helpers
-    admin_ids = helpers.get_all_admin_ids()
+    approver_ids = get_all_approvers()
     photo_file_id = message.photo[-1].file_id
 
     admin_msg = (
@@ -269,9 +299,9 @@ def process_screenshot(message: Message):
         f"<code>/decline {utr} &lt;reason&gt;</code>"
     )
 
-    for admin_id in admin_ids:
+    for app_id in approver_ids:
         try:
-            bot.send_photo(admin_id, photo=photo_file_id, caption=admin_msg, parse_mode="HTML")
+            bot.send_photo(app_id, photo=photo_file_id, caption=admin_msg, parse_mode="HTML")
         except Exception:
             pass
 
@@ -279,7 +309,7 @@ def process_screenshot(message: Message):
 @bot.message_handler(commands=["approve"])
 def approve_deposit(message: Message):
     import helpers
-    if not helpers.is_admin(message.from_user.id):
+    if not is_approver(message.from_user.id):
         return
 
     args = message.text.split()
@@ -321,11 +351,36 @@ def approve_deposit(message: Message):
     except Exception:
         pass
 
+    # Send Approval Log Notification to Main Owners
+    try:
+        depositor_chat = bot.get_chat(target_user_id)
+        depositor_name = f"@{depositor_chat.username}" if depositor_chat.username else (depositor_chat.first_name or str(target_user_id))
+    except Exception:
+        depositor_name = str(target_user_id)
+
+    approver = message.from_user
+    approver_name = f"@{approver.username}" if approver.username else (approver.first_name or str(approver.id))
+
+    owner_log_msg = (
+        f"Approved user ( {approver_name} ) approved a deposit of user ({depositor_name})\n"
+        f"<b>Depositer Name :</b> {depositor_name}\n"
+        f"<b>Approver name :</b> {approver_name}\n"
+        f"<b>Amount:</b> ₹{amount:.2f}\n"
+        f"<b>Utr :</b> <code>{utr}</code>"
+    )
+
+    for owner_id in helpers.get_all_admin_ids():
+        if owner_id != approver.id:
+            try:
+                bot.send_message(owner_id, owner_log_msg, parse_mode="HTML")
+            except Exception:
+                pass
+
 
 @bot.message_handler(commands=["decline"])
 def decline_deposit(message: Message):
     import helpers
-    if not helpers.is_admin(message.from_user.id):
+    if not is_approver(message.from_user.id):
         return
 
     args = message.text.split(maxsplit=2)
