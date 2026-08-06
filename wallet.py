@@ -12,6 +12,43 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def init_db():
+    """Creates necessary database tables if they do not exist."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Create users table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            balance REAL DEFAULT 100.0,
+            wager_required REAL DEFAULT 0.0,
+            is_bot INTEGER DEFAULT 0
+        )
+    """)
+    
+    # Create bets table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER,
+            game TEXT,
+            bet_amount REAL,
+            payout REAL,
+            result TEXT,
+            meta TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
+
+# Automatically initialize database tables on load
+init_db()
+
 def get_or_create_user(telegram_id: int, username: str = None, first_name: str = None):
     """Retrieves or registers a user in the database."""
     conn = get_db_connection()
