@@ -1,12 +1,50 @@
 import re
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot_instance import bot
-from wallet import adjust_balance, add_wager_requirement
+from wallet import adjust_balance, add_wager_requirement, get_db_connection
 from db import has_permission, grant_permission, revoke_permission, get_all_permitted_users, select
 
 MIN_DEPOSIT_AMOUNT = 30.0
 
-# --- DEPOSIT FLOW ---
+# --- USER STATE MANAGEMENT ---
+
+def set_user_state(telegram_id: int, state: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_states (
+            telegram_id INTEGER PRIMARY KEY,
+            state TEXT
+        )
+    """)
+    cursor.execute("INSERT OR REPLACE INTO user_states (telegram_id, state) VALUES (?, ?)", (telegram_id, state))
+    conn.commit()
+    conn.close()
+
+def get_user_state(telegram_id: int) -> str | None:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT state FROM user_states WHERE telegram_id = ?", (telegram_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row["state"] if row else None
+    except Exception:
+        conn.close()
+        return None
+
+def clear_user_state(telegram_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM user_states WHERE telegram_id = ?", (telegram_id,))
+        conn.commit()
+    except Exception:
+        pass
+    conn.close()
+
+
+# --- DEPOSIT COMMAND ---
 
 @bot.message_handler(commands=["depo", "deposit"])
 def start_deposit(message: Message):
@@ -17,42 +55,49 @@ def start_deposit(message: Message):
         bot.reply_to(message, "📩 Click below to start deposit in private messages:", reply_markup=markup)
         return
 
-    sent_msg = bot.reply_to(
+    set_user_state(message.from_user.id, "WAITING_DEPOSIT_AMOUNT")
+    
+    bot.reply_to(
         message, 
         f"💳 <b>Send the amount you wish to deposit:</b>\n<i>(Minimum deposit: ₹{int(MIN_DEPOSIT_AMOUNT)})</i>", 
         parse_mode="HTML"
     )
-    bot.register_next_step_handler(sent_msg, process_deposit_amount)
 
 
-def process_deposit_amount(message: Message):
-    text = message.text.strip().lower()
-    
-    # Extract numerical digits (handles "50", "₹50", "50rs", "50.0")
-    clean_text = re.sub(r"[^\d.]", "", text)
+# --- CATCH ALL TEXT MESSAGES IN DM FOR PENDING STATES ---
 
-    try:
-        amount = float(clean_text) if clean_text else 0.0
-        
-        if amount < MIN_DEPOSIT_AMOUNT:
-            bot.reply_to(message, f"❌ <b>Minimum deposit is ₹{int(MIN_DEPOSIT_AMOUNT)}.</b> Please try /deposit again.", parse_mode="HTML")
-            return
+@bot.message_handler(func=lambda msg: msg.chat.type == "private" and not msg.text.startswith("/"))
+def handle_private_messages(message: Message):
+    user_id = message.from_user.id
+    state = get_user_state(user_id)
 
-        bot.reply_to(
-            message, 
-            f"✅ <b>Deposit Request Received!</b>\n\n💰 Amount: ₹{amount:.2f}\nPlease wait for admin approval.",
-            parse_mode="HTML"
-        )
-        
-        notify_deposit_managers(message.from_user, amount)
+    if state == "WAITING_DEPOSIT_AMOUNT":
+        text = message.text.strip().lower()
+        clean_text = re.sub(r"[^\d.]", "", text)
 
-    except ValueError:
-        bot.reply_to(message, "❌ Invalid input. Please run /deposit and enter a valid numeric amount.")
+        try:
+            amount = float(clean_text) if clean_text else 0.0
+            
+            if amount < MIN_DEPOSIT_AMOUNT:
+                bot.reply_to(message, f"❌ <b>Minimum deposit is ₹{int(MIN_DEPOSIT_AMOUNT)}.</b> Please send a valid amount.", parse_mode="HTML")
+                return
+
+            clear_user_state(user_id)
+            
+            bot.reply_to(
+                message, 
+                f"✅ <b>Deposit Request Received!</b>\n\n💰 Amount: ₹{amount:.2f}\nPlease wait for admin approval.",
+                parse_mode="HTML"
+            )
+            
+            notify_deposit_managers(message.from_user, amount)
+
+        except ValueError:
+            bot.reply_to(message, "❌ Invalid input. Please enter a valid numeric amount (e.g., 50).")
 
 
 def notify_deposit_managers(user, amount: float):
     permitted = get_all_permitted_users("deposit")
-
     from helpers import ADMIN_IDS
     all_managers = list(set(permitted + list(ADMIN_IDS)))
 
@@ -76,7 +121,7 @@ def notify_deposit_managers(user, amount: float):
             pass
 
 
-# --- APPROVAL & DECLINE CALLBACK HANDLERS ---
+# --- APPROVAL / DECLINE HANDLERS ---
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith(("dep_app_", "dep_dec_")))
 def handle_deposit_action(call):
