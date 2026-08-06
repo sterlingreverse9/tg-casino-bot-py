@@ -27,7 +27,6 @@ def init_state_db():
         traceback.print_exc()
         print("-----------------------------------\n")
 
-# Guarantee database table initialization on import
 init_state_db()
 
 
@@ -164,7 +163,7 @@ def notify_deposit_managers(user, amount: float):
         print("--------------------------------------------\n")
 
 
-# --- APPROVAL / DECLINE HANDLERS ---
+# --- APPROVAL / DECLINE HANDLERS WITH SELF-APPROVAL PREVENTION ---
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith(("dep_app_", "dep_dec_")))
 def handle_deposit_action(call):
@@ -179,6 +178,11 @@ def handle_deposit_action(call):
         action = parts[1]
         target_user_id = int(parts[2])
         amount = float(parts[3])
+
+        # Self-approval restriction
+        if target_user_id == user_id:
+            bot.answer_callback_query(call.id, "❌ You cannot approve or decline your own deposit request!", show_alert=True)
+            return
 
         if action == "app":
             adjust_balance(target_user_id, amount)
