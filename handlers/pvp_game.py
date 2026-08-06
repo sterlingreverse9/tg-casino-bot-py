@@ -1,19 +1,14 @@
 import time
 import asyncio
-import random
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot_instance import bot
 from wallet import get_balance, adjust_balance, resolve_amount
 from helpers import ensure_user
 from pvp_state import create_challenge, get_challenge, remove_challenge
 
-RIG_GROUP = "@thecassinorigpvt"
 WINS_CHANNEL = "@thecassinowins"
 HOUSE_EDGE = 0.20  # 20% house edge
 PVP_TIMEOUT = 120  # 120 seconds auto-cancel
-
-FORCE_RIG_USERS = {}  # {user_id_or_username: "win" | "lose"}
-GLOBAL_RIG = None  # Global fallback state
 
 GAME_EMOJIS = {
     "dice": "🎲",
@@ -24,144 +19,125 @@ GAME_EMOJIS = {
     "slots": "🎰"
 }
 
-# --- RIG STATUS HELPER ---
-def get_user_rig_status(user_id, username=None):
-    if user_id in FORCE_RIG_USERS:
-        return FORCE_RIG_USERS[user_id]
-    if username:
-        clean_user = username.lstrip("@").lower()
-        if clean_user in FORCE_RIG_USERS:
-            return FORCE_RIG_USERS[clean_user]
-    return GLOBAL_RIG
 
-
-# --- 1. SILENT RIG ROLL ENGINE ---
-def roll_rigged_emoji(chat_id, emoji, target_value=None):
-    """
-    Rolls silently in @thecassinorigpvt until target_value is hit,
-    then resends using cached media to omit forward headers.
-    """
-    if target_value is None:
-        return bot.send_dice(chat_id, emoji=emoji)
-
-    matching_msg = None
-    for _ in range(30):
-        try:
-            msg = bot.send_dice(RIG_GROUP, emoji=emoji)
-            if msg and hasattr(msg, 'dice') and msg.dice.value == target_value:
-                matching_msg = msg
-                break
-        except Exception as e:
-            print(f"⚠️ Rig group roll error: {e}")
-            break
-
-    if matching_msg and hasattr(matching_msg.dice, 'file_id'):
-        return bot.send_cached_media(chat_id, matching_msg.dice.file_id)
-    else:
-        # Fallback to direct roll if rig group fails
-        return bot.send_dice(chat_id, emoji=emoji)
-
-
-# --- 2. ADMIN RIG CONTROL COMMAND ---
-@bot.message_handler(commands=["setwin"])
-def cmd_setwin(message):
-    global GLOBAL_RIG
-
-    if (message.from_user.username or "").lower() != "mrpuppyx":
-        return
-
-    args = message.text.split()
-    target = None
-    action = None
-
-    if message.reply_to_message:
-        if len(args) >= 2:
-            target = message.reply_to_message.from_user.id
-            action = args[1].lower()
-    elif len(args) >= 3:
-        target = args[1].lower().lstrip("@")
-        action = args[2].lower()
-
-    if not target or not action:
-        bot.reply_to(
-            message,
-            "⚠️ Usage:\n"
-            "• <code>/setwin &lt;@username|id|all&gt; &lt;win|lose|reset&gt;</code>\n"
-            "• Reply: <code>/setwin &lt;win|lose|reset&gt;</code>",
-            parse_mode="HTML"
-        )
-        return
-
-    if str(target) == "all":
-        if action in ["win", "lose"]:
-            GLOBAL_RIG = action
-            bot.reply_to(message, f"🌐 <b>Global default rig set to:</b> <b>{action.upper()}</b>", parse_mode="HTML")
-        else:
-            GLOBAL_RIG = None
-            bot.reply_to(message, "🔄 <b>Global default rig reset to normal.</b>", parse_mode="HTML")
-        return
-
-    key = int(target) if str(target).isdigit() else str(target).lower()
-
-    if action in ["win", "lose"]:
-        FORCE_RIG_USERS[key] = action
-        bot.reply_to(message, f"✅ Rig for <code>{key}</code> set to <b>{action.upper()}</b>", parse_mode="HTML")
-    else:
-        FORCE_RIG_USERS.pop(key, None)
-        bot.reply_to(message, f"🔄 Rig reset for <code>{key}</code>.", parse_mode="HTML")
-
-
-# --- 3. DR / SINGLE ROLLS WITH RIG SUPPORT ---
+# --- 1. DR (DICE ROLL) WITH INLINE BUTTONS & ALL MODES ---
 @bot.message_handler(commands=["dr"])
 def handle_dr_command(message):
     ensure_user(message)
     user_id = message.from_user.id
-    username_raw = message.from_user.username
     args = message.text.split()
 
-    if len(args) < 3:
-        bot.reply_to(message, "⚠️ Usage: <code>/dr &lt;amount&gt; &lt;high|low&gt;</code>", parse_mode="HTML")
+    if len(args) < 2:
+        bot.reply_to(message, "⚠️ Usage: <code>/dr &lt;amount&gt; [choice]</code>", parse_mode="HTML")
         return
 
     amount = resolve_amount(user_id, args[1])
-    choice = args[2].lower()
-
-    if amount is None or amount <= 0 or choice not in ["high", "low"]:
-        bot.reply_to(message, "❌ Invalid amount or choice (use 'high' or 'low').")
+    if amount is None or amount <= 0:
+        bot.reply_to(message, "❌ Invalid bet amount.")
         return
 
     user_bal = get_balance(user_id)
     if amount > user_bal:
-        bot.reply_to(message, f"❌ Insufficient balance! Balance: ₹{user_bal:.2f}")
+        bot.reply_to(message, f"❌ Insufficient balance! You have ₹{user_bal:.2f}.")
         return
 
+    # If only amount is passed, show inline buttons
+    if len(args) == 2:
+        markup = InlineKeyboardMarkup(row_width=3)
+        markup.add(
+            InlineKeyboardButton("1️⃣", callback_data=f"dr_play:{amount}:1"),
+            InlineKeyboardButton("2️⃣", callback_data=f"dr_play:{amount}:2"),
+            InlineKeyboardButton("3️⃣", callback_data=f"dr_play:{amount}:3"),
+            InlineKeyboardButton("4️⃣", callback_data=f"dr_play:{amount}:4"),
+            InlineKeyboardButton("5️⃣", callback_data=f"dr_play:{amount}:5"),
+            InlineKeyboardButton("6️⃣", callback_data=f"dr_play:{amount}:6")
+        )
+        markup.add(
+            InlineKeyboardButton("📈 High (4-6)", callback_data=f"dr_play:{amount}:high"),
+            InlineKeyboardButton("📉 Low (1-3)", callback_data=f"dr_play:{amount}:low")
+        )
+        markup.add(
+            InlineKeyboardButton("🔴 Odd", callback_data=f"dr_play:{amount}:odd"),
+            InlineKeyboardButton("🔵 Even", callback_data=f"dr_play:{amount}:even")
+        )
+
+        bot.reply_to(
+            message,
+            f"🎲 <b>Dice Roll (DR) • ₹{amount:.2f}</b>\nSelect your prediction below:",
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+        return
+
+    # Direct command parsing: /dr <amount> <choice>
+    choice = args[2].lower()
+    process_dr_game(message.chat.id, user_id, message.from_user.first_name, amount, choice)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("dr_play:"))
+def handle_dr_callback(call):
+    _, amount_str, choice = call.data.split(":")
+    user_id = call.from_user.id
+    amount = float(amount_str)
+
+    user_bal = get_balance(user_id)
+    if amount > user_bal:
+        bot.answer_callback_query(call.id, f"❌ Insufficient balance! (₹{user_bal:.2f})", show_alert=True)
+        return
+
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    process_dr_game(call.message.chat.id, user_id, call.from_user.first_name, amount, choice)
+
+
+def process_dr_game(chat_id, user_id, name, amount, choice):
     adjust_balance(user_id, -amount)
-    rig_status = get_user_rig_status(user_id, username_raw)
 
-    # Determine forced outcome target value (1-3 for low, 4-6 for high)
-    target_val = None
-    if rig_status == "win":
-        target_val = random.choice([4, 5, 6]) if choice == "high" else random.choice([1, 2, 3])
-    elif rig_status == "lose":
-        target_val = random.choice([1, 2, 3]) if choice == "high" else random.choice([4, 5, 6])
+    dice_msg = bot.send_dice(chat_id, emoji="🎲")
+    outcome = dice_msg.dice.value
 
-    roll_msg = roll_rigged_emoji(message.chat.id, "🎲", target_value=target_val)
-    outcome = roll_msg.dice.value if hasattr(roll_msg, 'dice') else random.randint(1, 6)
+    # Check winning condition and set payout multiplier
+    won = False
+    multiplier = 0.0
 
-    is_high = outcome >= 4
-    won = (choice == "high" and is_high) or (choice == "low" and not is_high)
+    if choice in ["1", "2", "3", "4", "5", "6"] and outcome == int(choice):
+        won = True
+        multiplier = 5.0  # Exact number guess
+    elif choice == "high" and outcome >= 4:
+        won = True
+        multiplier = 1.8
+    elif choice == "low" and outcome <= 3:
+        won = True
+        multiplier = 1.8
+    elif choice == "odd" and outcome % 2 != 0:
+        won = True
+        multiplier = 1.8
+    elif choice == "even" and outcome % 2 == 0:
+        won = True
+        multiplier = 1.8
 
     if won:
-        payout = amount * 1.8  # Account for house edge
+        payout = amount * multiplier
         adjust_balance(user_id, payout)
-        res_text = f"⚡ <b>Dice Roll (DR) • ₹{amount}</b>\n\n🎯 <b>You Chose:</b> {choice.upper()}\n🎲 <b>Outcome:</b> {outcome}\n\n🎉 <b>You Won ₹{payout:.2f}!</b>"
+        res_text = (
+            f"⚡ <b>Dice Roll (DR) • ₹{amount:.2f}</b>\n\n"
+            f"👤 <b>Player:</b> {name}\n"
+            f"🎯 <b>Choice:</b> {choice.upper()}\n"
+            f"🎲 <b>Outcome:</b> {outcome}\n\n"
+            f"🎉 <b>You Won ₹{payout:.2f}!</b>"
+        )
     else:
-        res_text = f"⚡ <b>Dice Roll (DR) • ₹{amount}</b>\n\n🎯 <b>You Chose:</b> {choice.upper()}\n🎲 <b>Outcome:</b> {outcome}\n\n❌ <b>You Lost ₹{amount:.2f}</b>"
+        res_text = (
+            f"⚡ <b>Dice Roll (DR) • ₹{amount:.2f}</b>\n\n"
+            f"👤 <b>Player:</b> {name}\n"
+            f"🎯 <b>Choice:</b> {choice.upper()}\n"
+            f"🎲 <b>Outcome:</b> {outcome}\n\n"
+            f"❌ <b>You Lost ₹{amount:.2f}</b>"
+        )
 
-    bot.send_message(message.chat.id, res_text, parse_mode="HTML")
+    bot.send_message(chat_id, res_text, parse_mode="HTML")
 
 
-# --- 4. GAME INITIALIZATION & PVP ---
+# --- 2. GAME INITIALIZATION & PVP ---
 @bot.message_handler(commands=["dice", "bowl", "dart", "basket", "football", "pvp", "duel"])
 def handle_game_init(message):
     ensure_user(message)
@@ -248,37 +224,24 @@ def handle_game_init(message):
     asyncio.run_coroutine_threadsafe(auto_cancel_timeout(msg.chat.id, msg.message_id, challenge_id), asyncio.get_event_loop())
 
 
-# --- 5. VS BOT ENGINE ---
+# --- 3. CLEAN VS BOT MATCH ENGINE ---
 def run_bot_match(message, emoji, bet, rounds):
     user_id = message.from_user.id
-    username_raw = message.from_user.username
     chat_id = message.chat.id
-    username = f"@{username_raw}" if username_raw else message.from_user.first_name
+    username = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
 
     adjust_balance(user_id, -bet)
     user_wins, bot_wins = 0, 0
-    rig_status = get_user_rig_status(user_id, username_raw)
 
     bot.send_message(chat_id, f"🎮 <b>Match vs Bot Started ({rounds} Rounds, ₹{bet:.2f} Bet)</b>", parse_mode="HTML")
 
     for r in range(1, rounds + 1):
-        # User rolls directly (Bot only rolls after user)
-        bot.send_message(chat_id, f"<b>--- ROUND {r}/{rounds} ---</b>\n{username} roll the {emoji} now!", parse_mode="HTML")
-        
-        # Rigging calculation for Bot's turn relative to status
-        target_val = None
-        u_roll_msg = bot.send_dice(chat_id, emoji=emoji)
-        u_roll = u_roll_msg.dice.value
+        bot.send_message(chat_id, f"<b>--- ROUND {r}/{rounds} ---</b>\n{username} rolling {emoji}...", parse_mode="HTML")
+        u_roll = bot.send_dice(chat_id, emoji=emoji).dice.value
         time.sleep(1.5)
 
-        if rig_status == "lose":
-            target_val = min(6, u_roll + 1) if u_roll < 6 else 6
-        elif rig_status == "win":
-            target_val = max(1, u_roll - 1) if u_roll > 1 else 1
-
         bot.send_message(chat_id, f"Bot rolling {emoji}...")
-        b_roll_msg = roll_rigged_emoji(chat_id, emoji, target_value=target_val)
-        b_roll = b_roll_msg.dice.value if hasattr(b_roll_msg, 'dice') else random.randint(1, 6)
+        b_roll = bot.send_dice(chat_id, emoji=emoji).dice.value
         time.sleep(1.5)
 
         if u_roll > b_roll:
@@ -290,7 +253,7 @@ def run_bot_match(message, emoji, bet, rounds):
         bot.send_message(chat_id, f"⚖️ <b>TIE! Starting Tie-Breaker Round...</b>", parse_mode="HTML")
         u_tb = bot.send_dice(chat_id, emoji=emoji).dice.value
         time.sleep(1.5)
-        b_tb = roll_rigged_emoji(chat_id, emoji).dice.value
+        b_tb = bot.send_dice(chat_id, emoji=emoji).dice.value
         time.sleep(1.5)
         if u_tb >= b_tb:
             user_wins += 1
@@ -305,7 +268,7 @@ def run_bot_match(message, emoji, bet, rounds):
         bot.send_message(chat_id, f"💀 <b>GAME OVER!</b>\n\nBot won the match! Better luck next time.", parse_mode="HTML")
 
 
-# --- 6. PVP CALLBACK HANDLER & GAME LOOPS ---
+# --- 4. PVP CALLBACKS & GAME LOOPS ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pvp_"))
 def handle_pvp_callbacks(call):
     action, challenge_id = call.data.split(":")
@@ -364,11 +327,11 @@ def run_pvp_match(challenge_id):
     for r in range(1, rounds + 1):
         bot.send_message(chat_id, f"<b>--- ROUND {r}/{rounds} ---</b>", parse_mode="HTML")
 
-        bot.send_message(chat_id, f"{p1} roll the {emoji} now!")
+        bot.send_message(chat_id, f"{p1} rolling {emoji}...")
         r1 = bot.send_dice(chat_id, emoji=emoji).dice.value
         time.sleep(2)
 
-        bot.send_message(chat_id, f"{p2} roll the {emoji} now!")
+        bot.send_message(chat_id, f"{p2} rolling {emoji}...")
         r2 = bot.send_dice(chat_id, emoji=emoji).dice.value
         time.sleep(2)
 
@@ -383,11 +346,11 @@ def run_pvp_match(challenge_id):
 
     if p1_wins == p2_wins:
         bot.send_message(chat_id, "⚖️ <b>TIE! Starting Tie-Breaker Round...</b>", parse_mode="HTML")
-        bot.send_message(chat_id, f"{p1} roll the {emoji} now!")
+        bot.send_message(chat_id, f"{p1} rolling {emoji}...")
         r1 = bot.send_dice(chat_id, emoji=emoji).dice.value
         time.sleep(2)
 
-        bot.send_message(chat_id, f"{p2} roll the {emoji} now!")
+        bot.send_message(chat_id, f"{p2} rolling {emoji}...")
         r2 = bot.send_dice(chat_id, emoji=emoji).dice.value
         time.sleep(2)
 
