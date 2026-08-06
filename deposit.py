@@ -27,7 +27,7 @@ def init_state_db():
         traceback.print_exc()
         print("-----------------------------------\n")
 
-# Run DB table creation on module load
+# Guarantee database table initialization on import
 init_state_db()
 
 
@@ -88,7 +88,7 @@ def start_deposit(message: Message):
         
         bot.reply_to(
             message, 
-            f"💳 <b>Send the amount you wish to deposit:</b>\n<i>Min deposit : 30rs</i>", 
+            f"💳 <b>Send the amount you wish to deposit:</b>\n<i>min bet : 30rs</i>", 
             parse_mode="HTML"
         )
     except Exception:
@@ -114,7 +114,7 @@ def process_deposit_text(message: Message):
         amount = float(clean_text) if clean_text else 0.0
         
         if amount < MIN_DEPOSIT_AMOUNT:
-            bot.reply_to(message, f"❌ <b>Min deposit : 30rs.</b> Please enter a valid amount.", parse_mode="HTML")
+            bot.reply_to(message, f"❌ <b>min bet : 30rs</b>. Please enter a valid amount.", parse_mode="HTML")
             return
 
         clear_user_state(user_id)
