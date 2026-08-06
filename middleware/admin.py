@@ -1,10 +1,15 @@
 from bot_instance import bot
 from db import insert, update
 from wallet import get_or_create_user, adjust_balance, resolve_amount
-from settings import get_min_bet, set_min_bet, get_max_bet, set_max_bet, get_house_edge, set_house_edge
-from middleware.admin import is_admin
+from settings import (
+    get_min_bet, set_min_bet,
+    get_max_bet, set_max_bet,
+    get_house_edge, set_house_edge
+)
 from helpers import get_target_user
+from middleware.admin import is_admin, add_admin, remove_admin
 
+# ---------- Balance Management ----------
 
 @bot.message_handler(commands=["add"])
 def cmd_add(message):
@@ -81,8 +86,7 @@ def cmd_deduct(message):
     bot.reply_to(message, f"✅ Deducted {amount} coins\nUser: <code>{target_id}</code>\nNew balance: {new_balance}", parse_mode="HTML")
 
 
-# ---------- Admin: promote/demote ----------
-
+# ---------- Admin: Promote / Demote ----------
 
 @bot.message_handler(commands=["promote"])
 def cmd_promote(message):
@@ -104,6 +108,7 @@ def cmd_promote(message):
 
     get_or_create_user(target_id, None)
     update("users", {"telegram_id": target_id}, {"is_admin": True})
+    add_admin(target_id)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "promote", "target_id": target_id})
     bot.reply_to(message, f"👑 <code>{target_id}</code> is now an admin.", parse_mode="HTML")
 
@@ -127,9 +132,12 @@ def cmd_demote(message):
         return
 
     update("users", {"telegram_id": target_id}, {"is_admin": False})
+    remove_admin(target_id)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "demote", "target_id": target_id})
     bot.reply_to(message, f"⬇️ <code>{target_id}</code> is no longer an admin.", parse_mode="HTML")
 
+
+# ---------- House & Bet Configuration ----------
 
 @bot.message_handler(commands=["updatehb"])
 def cmd_updatehb(message):
@@ -221,6 +229,8 @@ def cmd_sethousedge(message):
     set_house_edge(val)
     bot.reply_to(message, f"✅ House edge set to {val} ({val * 100:.1f}%). Applies to all games immediately.")
 
+
+# ---------- Reset Controls ----------
 
 @bot.message_handler(commands=["resetld"])
 def cmd_resetld(message):
