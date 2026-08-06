@@ -10,6 +10,8 @@ HEADERS = {
 }
 
 
+# --- CORE SUPABASE CRUD OPERATIONS ---
+
 def select(table, filters=None, order=None, desc=False, limit=None, single=False):
     params = {"select": "*"}
     if filters:
@@ -56,6 +58,19 @@ def update(table, filters, values):
         return None
 
 
+def delete(table, filters):
+    params = {}
+    for k, v in filters.items():
+        params[k] = f"eq.{v}"
+    try:
+        resp = requests.delete(f"{BASE}/{table}", headers=HEADERS, params=params)
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"[Supabase Delete Error on {table}]: {e}")
+        return False
+
+
 def upsert(table, row, on_conflict="chat_id"):
     """Insert or update on primary key conflict using Supabase resolution headers."""
     headers = HEADERS.copy()
@@ -70,7 +85,7 @@ def upsert(table, row, on_conflict="chat_id"):
         return None
 
 
-# --- Group Tracking Helpers ---
+# --- GROUP TRACKING HELPERS ---
 
 def register_group(chat_id: int, title: str):
     """Automatically record or update active group info."""
@@ -88,9 +103,10 @@ def get_all_groups():
     return groups if isinstance(groups, list) else []
 
 
-# --- Permission System Helpers ---
+# --- PERMISSION SYSTEM HELPERS ---
 
 def grant_permission(telegram_id: int, permission: str, granted_by: int):
+    """Grants a specific permission to a user."""
     return insert("user_permissions", {
         "telegram_id": telegram_id,
         "permission": permission.lower(),
@@ -98,7 +114,16 @@ def grant_permission(telegram_id: int, permission: str, granted_by: int):
     }) is not None
 
 
+def revoke_permission(telegram_id: int, permission: str):
+    """Revokes a specific permission from a user."""
+    return delete("user_permissions", {
+        "telegram_id": telegram_id,
+        "permission": permission.lower()
+    })
+
+
 def has_permission(telegram_id: int, permission: str) -> bool:
+    """Checks if a user has a specific permission or is a global admin."""
     user = select("users", filters={"telegram_id": telegram_id}, single=True)
     if user and user.get("is_admin"):
         return True
@@ -108,5 +133,6 @@ def has_permission(telegram_id: int, permission: str) -> bool:
 
 
 def get_all_permitted_users(permission: str):
+    """Retrieves all telegram_ids with a specific permission."""
     perm_list = select("user_permissions", filters={"permission": permission.lower()})
     return [p["telegram_id"] for p in perm_list if "telegram_id" in p] if isinstance(perm_list, list) else []
