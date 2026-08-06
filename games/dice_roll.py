@@ -1,6 +1,3 @@
-import random
-import os
-import logging
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from bot_instance import bot
 from wallet import (
@@ -11,17 +8,6 @@ from wallet import (
 )
 from settings import get_min_bet, get_max_bet
 
-RIG_GROUP_ID = int(os.getenv("RIG_GROUP_ID", "-1004291076026"))
-
-# --- RIGGING CHECK ---
-
-def get_rigged_target(user_id: int) -> bool | None:
-    try:
-        from settings import get_user_rig_status
-        return get_user_rig_status(user_id)
-    except Exception as e:
-        print(f"DEBUG: Error fetching rig status: {e}")
-        return None
 
 # --- EVALUATION LOGIC ---
 
@@ -50,20 +36,6 @@ def evaluate_dice_outcome(dice_value: int, bet_choice: str) -> tuple[bool, float
 
     return False, 0.0
 
-def generate_dice_roll(user_id: int, bet_choice: str) -> int:
-    rig_status = get_rigged_target(user_id)
-
-    if rig_status is False:
-        losing_outcomes = [v for v in range(1, 7) if not evaluate_dice_outcome(v, bet_choice)[0]]
-        if losing_outcomes:
-            return random.choice(losing_outcomes)
-
-    elif rig_status is True:
-        winning_outcomes = [v for v in range(1, 7) if evaluate_dice_outcome(v, bet_choice)[0]]
-        if winning_outcomes:
-            return random.choice(winning_outcomes)
-
-    return random.randint(1, 6)
 
 def validate_bet_amount(user_id: int, amount: float) -> tuple[bool, str]:
     min_b = get_min_bet()
@@ -79,29 +51,6 @@ def validate_bet_amount(user_id: int, amount: float) -> tuple[bool, str]:
 
     return True, ""
 
-def send_dice_animation(chat_id: int, user_id: int, bet_choice: str) -> int:
-    rig_status = get_rigged_target(user_id)
-    print(f"DEBUG: User {user_id} | Bet: {bet_choice} | Rig Status: {rig_status}")
-
-    # Explicitly check for forced loss (rig_status is False)
-    if rig_status is False:
-        try:
-            target_val = generate_dice_roll(user_id, bet_choice)
-            print(f"DEBUG: Rolling in RIG_GROUP_ID ({RIG_GROUP_ID}) for forced lose value {target_val}...")
-
-            for i in range(1, 20):
-                msg = bot.send_dice(RIG_GROUP_ID, emoji="🎲")
-                if msg.dice.value == target_val:
-                    print(f"DEBUG: Found target {target_val} on attempt {i}. Forwarding to chat {chat_id}.")
-                    bot.copy_message(chat_id, RIG_GROUP_ID, msg.message_id)
-                    return target_val
-
-        except Exception as e:
-            print(f"❌ [RIG ERROR] Direct API Failure in group {RIG_GROUP_ID}: {e}")
-
-    # Fallback / Unrigged
-    msg = bot.send_dice(chat_id, emoji="🎲")
-    return msg.dice.value
 
 # --- INLINE KEYBOARD UI ---
 
@@ -116,6 +65,7 @@ def get_bet_selection_keyboard(amount: float) -> InlineKeyboardMarkup:
     num_buttons = [InlineKeyboardButton(f"🎲 {i} [5.5x]", callback_data=f"dr_{amount}_{i}") for i in range(1, 7)]
     markup.add(*num_buttons)
     return markup
+
 
 def send_dr_guide(message: Message):
     guide_text = (
@@ -134,6 +84,7 @@ def send_dr_guide(message: Message):
     )
     bot.reply_to(message, guide_text, parse_mode="HTML")
 
+
 # --- GAME EXECUTION ---
 
 def process_dice_bet(chat_id: int, user_id: int, amount: float, choice: str, reply_to_id: int = None):
@@ -142,9 +93,14 @@ def process_dice_bet(chat_id: int, user_id: int, amount: float, choice: str, rep
         bot.send_message(chat_id, err_msg, reply_to_message_id=reply_to_id)
         return
 
+    # 1. Deduct bet amount from user's balance
     adjust_balance(user_id, -amount)
-    dice_val = send_dice_animation(chat_id, user_id, choice)
 
+    # 2. Let Telegram server roll the dice naturally
+    msg = bot.send_dice(chat_id, emoji="🎲")
+    dice_val = msg.dice.value
+
+    # 3. Evaluate outcome from Telegram's dice result
     is_win, multiplier = evaluate_dice_outcome(dice_val, choice)
     payout = amount * multiplier if is_win else 0.0
 
@@ -165,6 +121,7 @@ def process_dice_bet(chat_id: int, user_id: int, amount: float, choice: str, rep
             f"❌ <b>You Lost ₹{amount:.2f}</b>"
         )
 
+    # 4. Record bet in database
     record_bet(
         telegram_id=user_id,
         game="dice_roll",
@@ -175,6 +132,7 @@ def process_dice_bet(chat_id: int, user_id: int, amount: float, choice: str, rep
     )
 
     bot.send_message(chat_id, res_msg, reply_to_message_id=reply_to_id, parse_mode="HTML")
+
 
 # --- COMMAND HANDLERS ---
 
@@ -217,6 +175,7 @@ def handle_dr_command(message: Message):
 
     process_dice_bet(message.chat.id, user_id, amount, choice, reply_to_id=message.message_id)
 
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("dr_"))
 def handle_dr_callback(call: CallbackQuery):
     user_id = call.from_user.id
@@ -239,6 +198,7 @@ def handle_dr_callback(call: CallbackQuery):
         pass
 
     process_dice_bet(call.message.chat.id, user_id, amount, choice)
+
 
 # Aliases
 play_dice_roll = process_dice_bet
