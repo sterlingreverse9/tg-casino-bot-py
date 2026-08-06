@@ -1,7 +1,7 @@
+import os
 import re
 import traceback
 import sqlite3
-import urllib.parse
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot_instance import bot
 from wallet import adjust_balance, add_wager_requirement, get_db_connection
@@ -9,6 +9,14 @@ from db import select
 
 MIN_DEPOSIT_AMOUNT = 50.0
 UPI_ID = "piyushraao@fam"
+
+# Local Storage File Path Fix (Supports /sdcard/Download/ or Termux storage)
+LOCAL_QR_PATH = "/sdcard/Download/qr.jpg"  # Change to qr.jpy if your filename is literally qr.jpy
+if not os.path.exists(LOCAL_QR_PATH):
+    # Fallback check for alternative extension in Download folder
+    alt_path = "/sdcard/Download/qr.jpy"
+    if os.path.exists(alt_path):
+        LOCAL_QR_PATH = alt_path
 
 # --- DATABASE SETUP ---
 
@@ -160,6 +168,7 @@ def start_deposit(message: Message):
     )
 
 
+# Reads local poster image file directly from Download storage
 @bot.message_handler(func=lambda m: m.chat.type == "private" and get_dep_state(m.from_user.id) and get_dep_state(m.from_user.id)["state"] == "WAITING_AMOUNT")
 def process_amount(message: Message):
     if message.text.startswith("/"):
@@ -179,12 +188,6 @@ def process_amount(message: Message):
 
     set_dep_state(message.from_user.id, "WAITING_PAYMENT_CONFIRM", amount=amount)
 
-    name_encoded = urllib.parse.quote("The Casino")
-    upi_encoded = urllib.parse.quote(UPI_ID)
-    
-    # Poster style QR with direct image extension suffix to avoid document downloads
-    qr_url = f"https://upiqr.in/api/qr?vpa={upi_encoded}&name={name_encoded}&amount={amount:.2f}&extension=.png"
-
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("✅ I Have Paid", callback_data="dep_paid"))
 
@@ -194,7 +197,11 @@ def process_amount(message: Message):
         f"Tap the button below once you have paid."
     )
 
-    bot.send_photo(message.chat.id, photo=qr_url, caption=caption, parse_mode="HTML", reply_markup=markup)
+    try:
+        with open(LOCAL_QR_PATH, 'rb') as photo_file:
+            bot.send_photo(message.chat.id, photo=photo_file, caption=caption, parse_mode="HTML", reply_markup=markup)
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error loading local QR image from `{LOCAL_QR_PATH}`. Ensure termux-setup-storage is done.", parse_mode="Markdown")
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "dep_paid")
