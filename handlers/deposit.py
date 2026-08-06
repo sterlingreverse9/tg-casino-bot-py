@@ -1,21 +1,10 @@
-import sqlite3
+import re
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot_instance import bot
-from wallet import get_db_connection
+from wallet import adjust_balance, add_wager_requirement
+from db import has_permission, grant_permission, revoke_permission, get_all_permitted_users, select
 
-def is_deposit_admin(telegram_id: int) -> bool:
-    """Checks if user is main admin or has deposit permissions."""
-    from helpers import is_admin
-    if is_admin(telegram_id):
-        return True
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT can_manage_deposits FROM users WHERE telegram_id = ?", (telegram_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return bool(row["can_manage_deposits"]) if row else False
-
+MIN_DEPOSIT_AMOUNT = 30.0
 
 # --- DEPOSIT FLOW ---
 
@@ -28,42 +17,46 @@ def start_deposit(message: Message):
         bot.reply_to(message, "📩 Click below to start deposit in private messages:", reply_markup=markup)
         return
 
-    msg = bot.reply_to(message, "💳 <b>Send the amount you wish to deposit:</b>", parse_mode="HTML")
-    bot.register_next_step_handler(msg, process_deposit_amount)
+    sent_msg = bot.reply_to(
+        message, 
+        f"💳 <b>Send the amount you wish to deposit:</b>\n<i>(Minimum deposit: ₹{int(MIN_DEPOSIT_AMOUNT)})</i>", 
+        parse_mode="HTML"
+    )
+    bot.register_next_step_handler(sent_msg, process_deposit_amount)
 
 
 def process_deposit_amount(message: Message):
+    text = message.text.strip().lower()
+    
+    # Extract numerical digits (handles "50", "₹50", "50rs", "50.0")
+    clean_text = re.sub(r"[^\d.]", "", text)
+
     try:
-        amount = float(message.text.strip())
-        if amount <= 0:
-            bot.reply_to(message, "❌ Amount must be greater than 0. Try /deposit again.")
-            return
+        amount = float(clean_text) if clean_text else 0.0
         
+        if amount < MIN_DEPOSIT_AMOUNT:
+            bot.reply_to(message, f"❌ <b>Minimum deposit is ₹{int(MIN_DEPOSIT_AMOUNT)}.</b> Please try /deposit again.", parse_mode="HTML")
+            return
+
         bot.reply_to(
             message, 
-            f"✅ <b>Deposit Request Received!</b>\n\nAmount: ₹{amount:.2f}\nPlease wait for admin approval.",
+            f"✅ <b>Deposit Request Received!</b>\n\n💰 Amount: ₹{amount:.2f}\nPlease wait for admin approval.",
             parse_mode="HTML"
         )
         
-        # Notify deposit managers (Admins & permitted users)
         notify_deposit_managers(message.from_user, amount)
 
-    except (ValueError, TypeError):
-        bot.reply_to(message, "❌ Invalid amount. Please run /deposit and enter a valid number.")
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid input. Please run /deposit and enter a valid numeric amount.")
 
 
 def notify_deposit_managers(user, amount: float):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id FROM users WHERE can_manage_deposits = 1")
-    managers = [row["telegram_id"] for row in cursor.fetchall()]
-    conn.close()
+    permitted = get_all_permitted_users("deposit")
 
-    # Always include main admins
     from helpers import ADMIN_IDS
-    all_managers = list(set(managers + list(ADMIN_IDS)))
+    all_managers = list(set(permitted + list(ADMIN_IDS)))
 
-    markup = InlineKeyboardMarkup()
+    markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("✅ Approve", callback_data=f"dep_app_{user.id}_{amount}"),
         InlineKeyboardButton("❌ Decline", callback_data=f"dep_dec_{user.id}_{amount}")
@@ -83,7 +76,50 @@ def notify_deposit_managers(user, amount: float):
             pass
 
 
-# --- DEPOSIT PERMISSION COMMAND ---
+# --- APPROVAL & DECLINE CALLBACK HANDLERS ---
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith(("dep_app_", "dep_dec_")))
+def handle_deposit_action(call):
+    user_id = call.from_user.id
+    
+    if not has_permission(user_id, "deposit"):
+        bot.answer_callback_query(call.id, "❌ You do not have permission to manage deposits.", show_alert=True)
+        return
+
+    parts = call.data.split("_")
+    action = parts[1]
+    target_user_id = int(parts[2])
+    amount = float(parts[3])
+
+    if action == "app":
+        adjust_balance(target_user_id, amount)
+        add_wager_requirement(target_user_id, amount)
+
+        bot.edit_message_text(
+            f"{call.message.text}\n\n✅ <b>APPROVED by @{call.from_user.username or user_id}</b>",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode="HTML"
+        )
+        try:
+            bot.send_message(target_user_id, f"🎉 <b>Deposit Approved!</b>\n₹{amount:.2f} has been added to your balance.", parse_mode="HTML")
+        except Exception:
+            pass
+
+    elif action == "dec":
+        bot.edit_message_text(
+            f"{call.message.text}\n\n❌ <b>DECLINED by @{call.from_user.username or user_id}</b>",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode="HTML"
+        )
+        try:
+            bot.send_message(target_user_id, f"❌ Your deposit request for ₹{amount:.2f} was declined.", parse_mode="HTML")
+        except Exception:
+            pass
+
+
+# --- PERMISSION COMMAND ---
 
 @bot.message_handler(commands=["depositperm"])
 def toggle_deposit_perm(message: Message):
@@ -97,25 +133,20 @@ def toggle_deposit_perm(message: Message):
         return
 
     target = args[1].replace("@", "")
-    conn = get_db_connection()
-    cursor = conn.cursor()
 
     if target.isdigit():
-        cursor.execute("SELECT telegram_id, username, can_manage_deposits FROM users WHERE telegram_id = ?", (int(target),))
+        target_id = int(target)
     else:
-        cursor.execute("SELECT telegram_id, username, can_manage_deposits FROM users WHERE LOWER(username) = LOWER(?)", (target,))
+        user_row = select("users", filters={"username": target}, single=True)
+        target_id = user_row["telegram_id"] if user_row else None
 
-    user = cursor.fetchone()
-
-    if not user:
-        conn.close()
-        bot.reply_to(message, "❌ User not found in database. Make sure they have started the bot.")
+    if not target_id:
+        bot.reply_to(message, "❌ User not found in database.")
         return
 
-    new_perm = 0 if user["can_manage_deposits"] else 1
-    cursor.execute("UPDATE users SET can_manage_deposits = ? WHERE telegram_id = ?", (new_perm, user["telegram_id"]))
-    conn.commit()
-    conn.close()
-
-    status = "granted ✅" if new_perm else "revoked ❌"
-    bot.reply_to(message, f"👤 Deposit permissions for @{user['username'] or user['telegram_id']} have been <b>{status}</b>.", parse_mode="HTML")
+    if has_permission(target_id, "deposit"):
+        revoke_permission(target_id, "deposit")
+        bot.reply_to(message, f"❌ Deposit permission <b>revoked</b> for <code>{target_id}</code>.", parse_mode="HTML")
+    else:
+        grant_permission(target_id, "deposit", granted_by=message.from_user.id)
+        bot.reply_to(message, f"✅ Deposit permission <b>granted</b> for <code>{target_id}</code>.", parse_mode="HTML")
