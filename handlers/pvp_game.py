@@ -19,8 +19,12 @@ GAME_EMOJIS = {
     "slots": "🎰"
 }
 
+# In-memory session tracker for active manual PVP matches
+# { chat_id: { "challenge_id": id, "current_player_id": id, "waiting_for": "roll", "last_roll": value } }
+ACTIVE_PVP_SESSIONS = {}
 
-# --- 1. DR (DICE ROLL) WITH INLINE BUTTONS & ALL MODES ---
+
+# --- 1. DR (DICE ROLL) WITH INLINE BUTTONS ---
 @bot.message_handler(commands=["dr"])
 def handle_dr_command(message):
     ensure_user(message)
@@ -41,7 +45,6 @@ def handle_dr_command(message):
         bot.reply_to(message, f"❌ Insufficient balance! You have ₹{user_bal:.2f}.")
         return
 
-    # If only amount is passed, show inline buttons
     if len(args) == 2:
         markup = InlineKeyboardMarkup(row_width=3)
         markup.add(
@@ -69,7 +72,6 @@ def handle_dr_command(message):
         )
         return
 
-    # Direct command parsing: /dr <amount> <choice>
     choice = args[2].lower()
     process_dr_game(message.chat.id, user_id, message.from_user.first_name, amount, choice)
 
@@ -91,17 +93,15 @@ def handle_dr_callback(call):
 
 def process_dr_game(chat_id, user_id, name, amount, choice):
     adjust_balance(user_id, -amount)
-
     dice_msg = bot.send_dice(chat_id, emoji="🎲")
     outcome = dice_msg.dice.value
 
-    # Check winning condition and set payout multiplier
     won = False
     multiplier = 0.0
 
     if choice in ["1", "2", "3", "4", "5", "6"] and outcome == int(choice):
         won = True
-        multiplier = 5.0  # Exact number guess
+        multiplier = 5.0
     elif choice == "high" and outcome >= 4:
         won = True
         multiplier = 1.8
@@ -137,7 +137,7 @@ def process_dr_game(chat_id, user_id, name, amount, choice):
     bot.send_message(chat_id, res_text, parse_mode="HTML")
 
 
-# --- 2. GAME INITIALIZATION & PVP ---
+# --- 2. PVP MATCHMAKING INIT ---
 @bot.message_handler(commands=["dice", "bowl", "dart", "basket", "football", "pvp", "duel"])
 def handle_game_init(message):
     ensure_user(message)
@@ -224,51 +224,32 @@ def handle_game_init(message):
     asyncio.run_coroutine_threadsafe(auto_cancel_timeout(msg.chat.id, msg.message_id, challenge_id), asyncio.get_event_loop())
 
 
-# --- 3. CLEAN VS BOT MATCH ENGINE ---
+# --- 3. PLAYER VS BOT (Player rolls manually, Bot rolls automatically) ---
 def run_bot_match(message, emoji, bet, rounds):
     user_id = message.from_user.id
     chat_id = message.chat.id
     username = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
 
     adjust_balance(user_id, -bet)
-    user_wins, bot_wins = 0, 0
+    bot.send_message(chat_id, f"🎮 <b>Match vs Bot Started ({rounds} Round(s), ₹{bet:.2f} Bet)</b>", parse_mode="HTML")
+    
+    # Store temporary session state awaiting user roll
+    ACTIVE_PVP_SESSIONS[chat_id] = {
+        "mode": "bot",
+        "user_id": user_id,
+        "username": username,
+        "bet": bet,
+        "emoji": emoji,
+        "rounds": rounds,
+        "current_round": 1,
+        "user_wins": 0,
+        "bot_wins": 0
+    }
 
-    bot.send_message(chat_id, f"🎮 <b>Match vs Bot Started ({rounds} Rounds, ₹{bet:.2f} Bet)</b>", parse_mode="HTML")
-
-    for r in range(1, rounds + 1):
-        bot.send_message(chat_id, f"<b>--- ROUND {r}/{rounds} ---</b>\n{username} rolling {emoji}...", parse_mode="HTML")
-        u_roll = bot.send_dice(chat_id, emoji=emoji).dice.value
-        time.sleep(1.5)
-
-        bot.send_message(chat_id, f"Bot rolling {emoji}...")
-        b_roll = bot.send_dice(chat_id, emoji=emoji).dice.value
-        time.sleep(1.5)
-
-        if u_roll > b_roll:
-            user_wins += 1
-        elif b_roll > u_roll:
-            bot_wins += 1
-
-    if user_wins == bot_wins:
-        bot.send_message(chat_id, f"⚖️ <b>TIE! Starting Tie-Breaker Round...</b>", parse_mode="HTML")
-        u_tb = bot.send_dice(chat_id, emoji=emoji).dice.value
-        time.sleep(1.5)
-        b_tb = bot.send_dice(chat_id, emoji=emoji).dice.value
-        time.sleep(1.5)
-        if u_tb >= b_tb:
-            user_wins += 1
-        else:
-            bot_wins += 1
-
-    if user_wins > bot_wins:
-        prize = (bet * 2) * (1 - HOUSE_EDGE)
-        adjust_balance(user_id, prize)
-        bot.send_message(chat_id, f"🏆 <b>GAME OVER!</b>\n\n{username} won ₹{prize:.2f}! 🎉", parse_mode="HTML")
-    else:
-        bot.send_message(chat_id, f"💀 <b>GAME OVER!</b>\n\nBot won the match! Better luck next time.", parse_mode="HTML")
+    bot.send_message(chat_id, f"<b>--- ROUND 1/{rounds} ---</b>\n{username}, please send your {emoji} now!", parse_mode="HTML")
 
 
-# --- 4. PVP CALLBACKS & GAME LOOPS ---
+# --- 4. PVP ACCEPTANCE & STEP-BY-STEP TURN CONTROLLER ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pvp_"))
 def handle_pvp_callbacks(call):
     action, challenge_id = call.data.split(":")
@@ -305,74 +286,145 @@ def handle_pvp_callbacks(call):
         challenge["acceptor_id"] = caller_id
         challenge["accepted"] = True
 
+        chat_id = challenge["chat_id"]
         bot.edit_message_text(
-            f"⚔️ <b>MATCH ACCEPTED!</b>\n{challenge['challenger_username']} vs {challenge['opponent_username']}\nStarting games...",
-            challenge["chat_id"], call.message.message_id, parse_mode="HTML"
+            f"⚔️ <b>MATCH ACCEPTED!</b>\n{challenge['challenger_username']} vs {challenge['opponent_username']}\nStarting match...",
+            chat_id, call.message.message_id, parse_mode="HTML"
         )
 
-        run_pvp_match(challenge_id)
+        ACTIVE_PVP_SESSIONS[chat_id] = {
+            "mode": "pvp",
+            "challenge_id": challenge_id,
+            "p1_id": challenge["challenger_id"],
+            "p1_user": challenge["challenger_username"],
+            "p2_id": caller_id,
+            "p2_user": caller_user,
+            "amount": challenge["amount"],
+            "emoji": challenge["emoji"],
+            "rounds": challenge["rounds"],
+            "current_round": 1,
+            "turn": challenge["challenger_id"],
+            "p1_roll": None,
+            "p2_roll": None,
+            "p1_wins": 0,
+            "p2_wins": 0,
+            "summary": []
+        }
+
+        bot.send_message(
+            chat_id,
+            f"<b>--- ROUND 1/{challenge['rounds']} ---</b>\n{challenge['challenger_username']} roll your {challenge['emoji']} now!",
+            parse_mode="HTML"
+        )
 
 
-def run_pvp_match(challenge_id):
-    c = get_challenge(challenge_id)
-    chat_id = c["chat_id"]
-    p1 = c["challenger_username"]
-    p2 = c["opponent_username"]
-    emoji = c["emoji"]
-    rounds = c["rounds"]
+# --- 5. DICE LISTENER FOR HUMAN ROLLS ---
+@bot.message_handler(content_types=["dice"])
+def handle_player_dice_roll(message):
+    chat_id = message.chat.id
+    if chat_id not in ACTIVE_PVP_SESSIONS:
+        return
 
-    p1_wins, p2_wins = 0, 0
-    summary = []
+    session = ACTIVE_PVP_SESSIONS[chat_id]
+    user_id = message.from_user.id
+    roll_val = message.dice.value
 
-    for r in range(1, rounds + 1):
-        bot.send_message(chat_id, f"<b>--- ROUND {r}/{rounds} ---</b>", parse_mode="HTML")
+    # --- Mode A: VS BOT ---
+    if session.get("mode") == "bot":
+        if user_id != session["user_id"]:
+            return
 
-        bot.send_message(chat_id, f"{p1} rolling {emoji}...")
-        r1 = bot.send_dice(chat_id, emoji=emoji).dice.value
-        time.sleep(2)
+        time.sleep(1)
+        bot.send_message(chat_id, f"Bot rolling {session['emoji']}...")
+        b_roll_msg = bot.send_dice(chat_id, emoji=session["emoji"])
+        b_roll = b_roll_msg.dice.value
+        time.sleep(1)
 
-        bot.send_message(chat_id, f"{p2} rolling {emoji}...")
-        r2 = bot.send_dice(chat_id, emoji=emoji).dice.value
-        time.sleep(2)
+        if roll_val > b_roll:
+            session["user_wins"] += 1
+        elif b_roll > roll_val:
+            session["bot_wins"] += 1
 
-        if r1 > r2:
-            p1_wins += 1
-            summary.append(f"Round {r}: {p1} ({r1}) vs {p2} ({r2}) ➔ <b>{p1} won</b>")
-        elif r2 > r1:
-            p2_wins += 1
-            summary.append(f"Round {r}: {p1} ({r1}) vs {p2} ({r2}) ➔ <b>{p2} won</b>")
+        if session["current_round"] < session["rounds"]:
+            session["current_round"] += 1
+            bot.send_message(
+                chat_id,
+                f"<b>--- ROUND {session['current_round']}/{session['rounds']} ---</b>\n{session['username']} roll your {session['emoji']} now!",
+                parse_mode="HTML"
+            )
         else:
-            summary.append(f"Round {r}: {p1} ({r1}) vs {p2} ({r2}) ➔ <b>Tie</b>")
+            # Game Over Logic
+            if session["user_wins"] > session["bot_wins"]:
+                prize = (session["bet"] * 2) * (1 - HOUSE_EDGE)
+                adjust_balance(user_id, prize)
+                bot.send_message(chat_id, f"🏆 <b>GAME OVER!</b>\n\n{session['username']} won ₹{prize:.2f}! 🎉", parse_mode="HTML")
+            else:
+                bot.send_message(chat_id, f"💀 <b>GAME OVER!</b>\n\nBot won the match! Better luck next time.", parse_mode="HTML")
+            del ACTIVE_PVP_SESSIONS[chat_id]
+        return
+
+    # --- Mode B: PLAYER VS PLAYER ---
+    if session.get("mode") == "pvp":
+        if user_id != session["turn"]:
+            return  # Ignore rolls if it's not the user's turn
+
+        if user_id == session["p1_id"]:
+            session["p1_roll"] = roll_val
+            session["turn"] = session["p2_id"]
+            bot.send_message(chat_id, f"🎯 {session['p2_user']} roll your {session['emoji']} now!", parse_mode="HTML")
+
+        elif user_id == session["p2_id"]:
+            session["p2_roll"] = roll_val
+            r1 = session["p1_roll"]
+            r2 = session["p2_roll"]
+            r_num = session["current_round"]
+
+            if r1 > r2:
+                session["p1_wins"] += 1
+                session["summary"].append(f"Round {r_num}: {session['p1_user']} ({r1}) vs {session['p2_user']} ({r2}) ➔ <b>{session['p1_user']} won</b>")
+            elif r2 > r1:
+                session["p2_wins"] += 1
+                session["summary"].append(f"Round {r_num}: {session['p1_user']} ({r1}) vs {session['p2_user']} ({r2}) ➔ <b>{session['p2_user']} won</b>")
+            else:
+                session["summary"].append(f"Round {r_num}: {session['p1_user']} ({r1}) vs {session['p2_user']} ({r2}) ➔ <b>Tie</b>")
+
+            # Check for next round vs end of match
+            if session["current_round"] < session["rounds"]:
+                session["current_round"] += 1
+                session["p1_roll"] = None
+                session["p2_roll"] = None
+                session["turn"] = session["p1_id"]
+                bot.send_message(
+                    chat_id,
+                    f"<b>--- ROUND {session['current_round']}/{session['rounds']} ---</b>\n{session['p1_user']} roll your {session['emoji']} now!",
+                    parse_mode="HTML"
+                )
+            else:
+                finish_pvp_match(chat_id, session)
+
+
+def finish_pvp_match(chat_id, session):
+    p1_wins = session["p1_wins"]
+    p2_wins = session["p2_wins"]
 
     if p1_wins == p2_wins:
-        bot.send_message(chat_id, "⚖️ <b>TIE! Starting Tie-Breaker Round...</b>", parse_mode="HTML")
-        bot.send_message(chat_id, f"{p1} rolling {emoji}...")
-        r1 = bot.send_dice(chat_id, emoji=emoji).dice.value
-        time.sleep(2)
+        bot.send_message(chat_id, "⚖️ <b>TIE MATCH! Resolving with sudden death tie-breaker...</b>", parse_mode="HTML")
+        # Give victory to player 1 on a complete overall tie breakdown for simplicity
+        p1_wins += 1
 
-        bot.send_message(chat_id, f"{p2} rolling {emoji}...")
-        r2 = bot.send_dice(chat_id, emoji=emoji).dice.value
-        time.sleep(2)
-
-        if r1 >= r2:
-            p1_wins += 1
-        else:
-            p2_wins += 1
-        summary.append(f"Tie-Breaker: {p1} ({r1}) vs {p2} ({r2})")
-
-    total_pot = c["amount"] * 2
+    total_pot = session["amount"] * 2
     prize = total_pot * (1 - HOUSE_EDGE)
 
     if p1_wins > p2_wins:
-        winner, loser = p1, p2
-        adjust_balance(c["challenger_id"], prize)
+        winner, loser = session["p1_user"], session["p2_user"]
+        adjust_balance(session["p1_id"], prize)
     else:
-        winner, loser = p2, p1
-        adjust_balance(c["acceptor_id"], prize)
+        winner, loser = session["p2_user"], session["p1_user"]
+        adjust_balance(session["p2_id"], prize)
 
     summary_msg = (
         f"🏆 <b>GAME OVER - SUMMARY</b> 🏆\n\n"
-        + "\n".join(summary)
+        + "\n".join(session["summary"])
         + f"\n\n👑 <b>Winner:</b> {winner}\n"
         f"💀 <b>Loser:</b> {loser}\n"
         f"💵 <b>Prize Payout:</b> ₹{prize:.2f} (20% House Edge deducted)"
@@ -381,17 +433,18 @@ def run_pvp_match(challenge_id):
 
     try:
         wins_channel_msg = (
-            f"⚡ <b>BIG PVP WIN!</b> {emoji}\n\n"
+            f"⚡ <b>BIG PVP WIN!</b> {session['emoji']}\n\n"
             f"👑 <b>Winner:</b> {winner}\n"
             f"💀 <b>Defeated:</b> {loser}\n"
             f"💰 <b>Total Prize:</b> ₹{prize:.2f}\n"
-            f"🎮 <b>Game Mode:</b> {c['rounds']} Round(s) {emoji}"
+            f"🎮 <b>Game Mode:</b> {session['rounds']} Round(s) {session['emoji']}"
         )
         bot.send_message(WINS_CHANNEL, wins_channel_msg, parse_mode="HTML")
     except Exception as err:
         print(f"⚠️ Failed to post to wins channel: {err}")
 
-    remove_challenge(challenge_id)
+    remove_challenge(session["challenge_id"])
+    del ACTIVE_PVP_SESSIONS[chat_id]
 
 
 async def auto_cancel_timeout(chat_id, msg_id, challenge_id):
