@@ -1,224 +1,218 @@
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import re
+import sqlite3
+from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot_instance import bot
-from db import select
-from config import CASINO_NAME
-from wallet import adjust_balance
-from game_status import is_game_enabled, set_game_enabled
-from middleware.admin import is_admin
-from helpers import ensure_user, notify_admins_of_deposit
-from state import deposit_states
-from settings import get_deposit_upi, set_deposit_upi
-from deposit import (
-    create_deposit, save_utr, save_screenshot,
-    get_deposit_by_utr, approve_deposit, decline_deposit, pending_deposits, deposit_history,
-)
-from referral import apply_deposit_reward
+from wallet import adjust_balance, add_wager_requirement, get_db_connection
+from db import has_permission, grant_permission, revoke_permission, get_all_permitted_users, select
 
-MIN_DEPOSIT = 30
+MIN_DEPOSIT_AMOUNT = 30.0
 
+# --- USER STATE MANAGEMENT ---
 
-@bot.message_handler(commands=["changeupi"])
-def cmd_changeupi(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "Usage: /changeupi <upi_id>")
-        return
-    set_deposit_upi(parts[1])
-    bot.reply_to(message, f"✅ Deposit UPI changed to {parts[1]}")
-
-
-@bot.message_handler(commands=["deposit", "depo"])
-def cmd_deposit(message):
-    if not is_game_enabled("deposit"):
-        bot.reply_to(message, "Deposits are currently paused.")
-        return
-
-    if message.chat.type != "private":
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("💬 Open in DM", url=f"https://t.me/{bot.get_me().username}?start=deposit"))
-        bot.reply_to(message, "💳 Deposits are handled in DM — tap below to continue.", reply_markup=markup)
-        return
-
-    ensure_user(message)
-    deposit_states[message.from_user.id] = {"step": "amount"}
-    bot.reply_to(message, f"💳 Enter deposit amount.\n\nMinimum: {MIN_DEPOSIT} coins")
-
-
-@bot.message_handler(
-    func=lambda m: m.from_user.id in deposit_states and m.content_type == "text" and not m.text.startswith("/"),
-    content_types=["text"],
-)
-def handle_deposit_text(message):
-    state = deposit_states[message.from_user.id]
-
-    if state["step"] == "amount":
-        try:
-            amount = float(message.text.strip())
-        except ValueError:
-            bot.reply_to(message, "Enter a valid amount.")
-            return
-        if amount < MIN_DEPOSIT:
-            bot.reply_to(message, f"Minimum deposit is {MIN_DEPOSIT} coins.")
-            return
-
-        dep = create_deposit(message.from_user.id, message.from_user.username, amount)
-        state["deposit_id"] = dep["id"]
-        state["amount"] = amount
-        state["step"] = "paid"
-
-        caption = (
-            f"💰 Deposit Amount: {amount} coins\n\n"
-            f"UPI ID: {get_deposit_upi()}\n"
-            "(fun-coins only — no real money accepted here)\n\n"
-            "After payment, tap 'I Have Paid'."
+def set_user_state(telegram_id: int, state: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_states (
+            telegram_id INTEGER PRIMARY KEY,
+            state TEXT
         )
+    """)
+    cursor.execute("INSERT OR REPLACE INTO user_states (telegram_id, state) VALUES (?, ?)", (telegram_id, state))
+    conn.commit()
+    conn.close()
+
+
+def get_user_state(telegram_id: int) -> str | None:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT state FROM user_states WHERE telegram_id = ?", (telegram_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row["state"] if row else None
+    except Exception:
+        conn.close()
+        return None
+
+
+def clear_user_state(telegram_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM user_states WHERE telegram_id = ?", (telegram_id,))
+        conn.commit()
+    except Exception:
+        pass
+    conn.close()
+
+
+# --- DEPOSIT COMMAND ---
+
+@bot.message_handler(commands=["depo", "deposit"])
+def start_deposit(message: Message):
+    if message.chat.type != "private":
+        bot_username = bot.get_me().username
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("✅ I Have Paid", callback_data="deposit_paid"))
-
-        try:
-            with open("/storage/emulated/0/Download/qr.jpg", "rb") as photo:
-                bot.send_photo(message.chat.id, photo, caption=caption, reply_markup=markup)
-        except FileNotFoundError:
-            bot.send_message(message.chat.id, caption, reply_markup=markup)
+        markup.add(InlineKeyboardButton("➡️ Open in DM", url=f"https://t.me/{bot_username}?start=deposit"))
+        bot.reply_to(message, "📩 Click below to start deposit in private messages:", reply_markup=markup)
         return
 
-    if state["step"] == "utr":
-        utr = message.text.strip()
-        if len(utr) != 12 or not utr.isdigit():
-            bot.reply_to(message, "UTR must be exactly 12 digits.")
-            return
-        try:
-            save_utr(state["deposit_id"], utr)
-        except Exception:
-            bot.reply_to(message, "That UTR was already used. Try a different 12 digits:")
-            return
-        state["step"] = "screenshot"
-        bot.reply_to(message, "📸 Now send the payment screenshot.")
-        return
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "deposit_paid")
-def handle_deposit_paid(call):
-    bot.answer_callback_query(call.id)
-    state = deposit_states.get(call.from_user.id)
-    if not state:
-        bot.send_message(call.message.chat.id, "Session expired — use /deposit again.")
-        return
-    state["step"] = "utr"
-    bot.send_message(call.message.chat.id, "💳 Please send your 12-digit UTR / Transaction ID.")
-
-
-@bot.message_handler(
-    func=lambda m: m.from_user.id in deposit_states and deposit_states[m.from_user.id]["step"] == "screenshot",
-    content_types=["photo"],
-)
-def handle_deposit_screenshot(message):
-    state = deposit_states[message.from_user.id]
-    save_screenshot(state["deposit_id"], message.photo[-1].file_id)
-    dep = select("deposits", filters={"id": state["deposit_id"]}, single=True)
-    deposit_states.pop(message.from_user.id, None)
-
+    set_user_state(message.from_user.id, "WAITING_DEPOSIT_AMOUNT")
+    
     bot.reply_to(
-        message,
-        "✅ Deposit request submitted!\n\nYour payment will be verified by an admin shortly.",
+        message, 
+        f"💳 <b>Send the amount you wish to deposit (MINIMUM : ₹30) :</b>\n<i>(Minimum deposit: ₹{int(MIN_DEPOSIT_AMOUNT)})</i>", 
+        parse_mode="HTML"
     )
-    if dep:
-        notify_admins_of_deposit(message.from_user.id, message.from_user.username, dep["utr"])
 
 
-@bot.message_handler(commands=["approve"])
-def cmd_approve_deposit(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
+# --- CATCH TEXT INPUT FOR DEPOSIT IN DM ---
+
+@bot.message_handler(func=lambda msg: msg.chat.type == "private" and get_user_state(msg.from_user.id) == "WAITING_DEPOSIT_AMOUNT")
+def process_deposit_text(message: Message):
+    user_id = message.from_user.id
+    text = message.text.strip().lower()
+
+    if text.startswith("/"):
+        clear_user_state(user_id)
         return
-    parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "Usage: /approve <utr>")
-        return
-    utr = parts[1]
-    dep = get_deposit_by_utr(utr)
-    if dep is None or dep["status"] != "pending":
-        bot.reply_to(message, "No pending deposit found with that UTR.")
-        return
-    approve_deposit(utr, message.from_user.id)
-    new_balance = adjust_balance(int(dep["telegram_id"]), float(dep["amount"]))
-    apply_deposit_reward(int(dep["telegram_id"]), float(dep["amount"]))
-    bot.reply_to(message, f"✅ Approved. Credited {dep['amount']} coins to {dep['telegram_id']}.")
+
+    clean_text = re.sub(r"[^\d.]", "", text)
+
     try:
-        bot.send_message(int(dep["telegram_id"]), f"✅ Deposit approved!\n\n+{dep['amount']} coins\nBalance: {new_balance}")
-    except Exception:
-        pass
+        amount = float(clean_text) if clean_text else 0.0
+        
+        if amount < MIN_DEPOSIT_AMOUNT:
+            bot.reply_to(message, f"❌ <b>Minimum deposit is ₹{int(MIN_DEPOSIT_AMOUNT)}.</b> Please enter a valid amount.", parse_mode="HTML")
+            return
+
+        clear_user_state(user_id)
+        
+        bot.reply_to(
+            message, 
+            f"✅ <b>Deposit Request Received!</b>\n\n💰 Amount: ₹{amount:.2f}\nPlease wait for admin approval.",
+            parse_mode="HTML"
+        )
+        
+        notify_deposit_managers(message.from_user, amount)
+
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid input. Please enter a valid numeric amount (e.g., 50).")
 
 
-@bot.message_handler(commands=["decline"])
-def cmd_decline_deposit(message):
+def notify_deposit_managers(user, amount: float):
+    permitted = get_all_permitted_users("deposit")
+    from helpers import ADMIN_IDS
+    all_managers = list(set(permitted + list(ADMIN_IDS)))
+
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("✅ Approve", callback_data=f"dep_app_{user.id}_{amount}"),
+        InlineKeyboardButton("❌ Decline", callback_data=f"dep_dec_{user.id}_{amount}")
+    )
+
+    msg_text = (
+        f"📥 <b>NEW DEPOSIT REQUEST</b>\n\n"
+        f"👤 <b>User:</b> {user.first_name} (@{user.username or 'N/A'})\n"
+        f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
+        f"💰 <b>Amount:</b> ₹{amount:.2f}"
+    )
+
+    for admin_id in all_managers:
+        try:
+            bot.send_message(admin_id, msg_text, parse_mode="HTML", reply_markup=markup)
+        except Exception:
+            pass
+
+
+# --- APPROVAL / DECLINE HANDLERS ---
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith(("dep_app_", "dep_dec_")))
+def handle_deposit_action(call):
+    user_id = call.from_user.id
+    
+    if not has_permission(user_id, "deposit"):
+        bot.answer_callback_query(call.id, "❌ You do not have permission to manage deposits.", show_alert=True)
+        return
+
+    parts = call.data.split("_")
+    action = parts[1]
+    target_user_id = int(parts[2])
+    amount = float(parts[3])
+
+    if action == "app":
+        adjust_balance(target_user_id, amount)
+        add_wager_requirement(target_user_id, amount)
+
+        bot.edit_message_text(
+            f"{call.message.text}\n\n✅ <b>APPROVED by @{call.from_user.username or user_id}</b>",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode="HTML"
+        )
+        try:
+            bot.send_message(target_user_id, f"🎉 <b>Deposit Approved!</b>\n₹{amount:.2f} has been added to your balance.", parse_mode="HTML")
+        except Exception:
+            pass
+
+    elif action == "dec":
+        bot.edit_message_text(
+            f"{call.message.text}\n\n❌ <b>DECLINED by @{call.from_user.username or user_id}</b>",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode="HTML"
+        )
+        try:
+            bot.send_message(target_user_id, f"❌ Your deposit request for ₹{amount:.2f} was declined.", parse_mode="HTML")
+        except Exception:
+            pass
+
+
+# --- PERMISSION COMMAND ---
+
+@bot.message_handler(commands=["depositperm"])
+def toggle_deposit_perm(message: Message):
+    from helpers import is_admin
     if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
         return
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 2:
-        bot.reply_to(message, "Usage: /decline <utr> <reason>")
+
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "⚠️ <b>Usage:</b> <code>/depositperm @username</code> or <code>/depositperm <telegram_id></code>", parse_mode="HTML")
         return
-    utr = parts[1]
-    reason = parts[2] if len(parts) > 2 else "No reason given"
-    dep = get_deposit_by_utr(utr)
-    if dep is None or dep["status"] != "pending":
-        bot.reply_to(message, "No pending deposit found with that UTR.")
+
+    target = args[1].replace("@", "")
+
+    if target.isdigit():
+        target_id = int(target)
+    else:
+        user_row = select("users", filters={"username": target}, single=True)
+        target_id = user_row["telegram_id"] if user_row else None
+
+    if not target_id:
+        bot.reply_to(message, "❌ User not found in database.")
         return
-    decline_deposit(utr, message.from_user.id, reason)
-    bot.reply_to(message, "❌ Deposit declined.")
+
+    if has_permission(target_id, "deposit"):
+        revoke_permission(target_id, "deposit")
+        bot.reply_to(message, f"❌ Deposit permission <b>revoked</b> for <code>{target_id}</code>.", parse_mode="HTML")
+    else:
+        grant_permission(target_id, "deposit", granted_by=message.from_user.id)
+        bot.reply_to(message, f"✅ Deposit permission <b>granted</b> for <code>{target_id}</code>.", parse_mode="HTML")
+
+
+# --- HELPER COMPATIBILITY STUBS ---
+
+def get_deposit_by_utr(utr: str):
+    """Fallback stub to satisfy imports in helpers.py"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
     try:
-        bot.send_message(int(dep["telegram_id"]), f"❌ Deposit declined.\nReason: {reason}")
+        cursor.execute("SELECT * FROM deposits WHERE utr = ?", (utr,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
     except Exception:
-        pass
-
-
-@bot.message_handler(commands=["pendingdepo"])
-def cmd_pending_deposits(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    deps = pending_deposits()
-    if not deps:
-        bot.reply_to(message, "No pending deposit requests.")
-        return
-    lines = [
-        f"👤 {d['telegram_id']} • {d['amount']} coins • UTR {d.get('utr') or '-'}\n"
-        f"   /approve {d.get('utr') or ''}  |  /decline {d.get('utr') or ''} <reason>"
-        for d in deps
-    ]
-    bot.reply_to(message, f"⏳ Pending deposits ({len(deps)}):\n\n" + "\n\n".join(lines))
-
-
-@bot.message_handler(commands=["deposithistory"])
-def cmd_deposit_history(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    deps = deposit_history(limit=20)
-    if not deps:
-        bot.reply_to(message, "No deposits yet.")
-        return
-    lines = [f"{d['status'].upper()} | {d['amount']} coins | {d.get('utr') or '-'}" for d in deps]
-    bot.reply_to(message, "📜 Deposit History:\n\n" + "\n".join(lines))
-
-
-@bot.message_handler(commands=["stopdeposit"])
-def cmd_stopdeposit(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    set_game_enabled("deposit", False)
-    bot.reply_to(message, "⏸️ Deposits paused.")
-
-
-@bot.message_handler(commands=["startdeposit"])
-def cmd_startdeposit(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-    set_game_enabled("deposit", True)
-    bot.reply_to(message, "▶️ Deposits resumed.")
+        conn.close()
+        return None
