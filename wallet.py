@@ -101,7 +101,7 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
 
 # --- SETUP FUNCTION FOR MAIN.PY ---
 
-def setup_secret_wallet_handlers():
+def setup_secret_wallet_handlers(bot=None):
     """Initializer called by main.py to register wallet handlers."""
     pass
 
