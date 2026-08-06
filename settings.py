@@ -1,10 +1,10 @@
 from db import select, insert, update
 from config import HOUSE_EDGE as DEFAULT_HOUSE_EDGE
 
-DEFAULT_MIN_BET = 10
-DEFAULT_MAX_BET_PCT = 0.05  # 5% of house balance if never set
+DEFAULT_MIN_BET = 5
+DEFAULT_MAX_BET_PCT = 0.20  # 5% of house balance if never set
 DEFAULT_MIN_WITHDRAW = 100.0
-DEFAULT_HOUSE_BALANCE = 10000.0  # Fallback house balance
+DEFAULT_HOUSE_BALANCE = 500.0  # Fallback house balance
 
 
 def _get(key, default):
@@ -106,3 +106,39 @@ def get_min_withdraw() -> float:
 
 def set_min_withdraw(amount: float):
     _set("min_withdraw", amount)
+
+
+# --- Rigging & Win Rate Controls ---
+
+def set_user_rig_status(target: str, win_rate: float):
+    """
+    Sets target win rate (0 to 100) for a specific user ID or 'all'.
+    """
+    key = f"winrate_{target}"
+    _set(key, float(win_rate))
+
+
+def get_user_rig_status(user_id: int) -> bool | None:
+    """
+    Evaluates whether a user is forced to LOSE (False), WIN (True), or Normal (None).
+    Checks user-specific win rate first, then falls back to 'all'.
+    """
+    # 1. Check user-specific win rate
+    user_rate = _get(f"winrate_{user_id}", None)
+    if user_rate is not None:
+        rate = float(user_rate)
+        if rate <= 0.0:
+            return False  # Force LOSE
+        if rate >= 100.0:
+            return True   # Force WIN
+
+    # 2. Check global 'all' win rate
+    global_rate = _get("winrate_all", None)
+    if global_rate is not None:
+        rate = float(global_rate)
+        if rate <= 0.0:
+            return False  # Force LOSE
+        if rate >= 100.0:
+            return True   # Force WIN
+
+    return None  # Normal RNG
