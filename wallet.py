@@ -65,6 +65,19 @@ def add_wager_requirement(telegram_id: int, amount: float):
         pass
     conn.close()
 
+def get_wager_remaining(telegram_id: int) -> float:
+    """Returns the remaining required wager balance for a user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT wager_required FROM users WHERE telegram_id = ?", (telegram_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return float(row["wager_required"]) if row and row["wager_required"] else 0.0
+    except sqlite3.OperationalError:
+        conn.close()
+        return 0.0
+
 def get_house_balance() -> float:
     conn = get_db_connection()
     cursor = conn.cursor()
