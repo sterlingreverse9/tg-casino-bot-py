@@ -16,8 +16,7 @@ def init_db():
     """Creates necessary database tables if they do not exist."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Create users table
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
@@ -28,8 +27,7 @@ def init_db():
             is_bot INTEGER DEFAULT 0
         )
     """)
-    
-    # Create bets table
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS bets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,15 +40,13 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    
+
     conn.commit()
     conn.close()
 
-# Automatically initialize database tables on load
 init_db()
 
 def get_or_create_user(telegram_id: int, username: str = None, first_name: str = None):
-    """Retrieves or registers a user in the database."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
@@ -81,7 +77,7 @@ def adjust_balance(user_id: int, amount: float) -> float:
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, user_id))
     conn.commit()
-    
+
     cursor.execute("SELECT balance FROM users WHERE telegram_id = ?", (user_id,))
     row = cursor.fetchone()
     new_bal = row["balance"] if row else 0.0
@@ -89,7 +85,6 @@ def adjust_balance(user_id: int, amount: float) -> float:
     return float(new_bal)
 
 def add_wager_requirement(telegram_id: int, amount: float):
-    """Adds to a user's required wagering balance upon deposit."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -103,7 +98,6 @@ def add_wager_requirement(telegram_id: int, amount: float):
     conn.close()
 
 def get_wager_remaining(telegram_id: int) -> float:
-    """Returns the remaining required wager balance for a user."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -142,21 +136,14 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO bets (telegram_id, game, bet_amount, payout, result, meta) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO bets (telegram_id, game, bet_amount, payout, result, meta) VALUES (?, ?, ?, ?, ?)",
         (telegram_id, game, bet_amount, payout, result, str(meta) if meta else "")
     )
     conn.commit()
     conn.close()
 
-
-# --- SETUP FUNCTION FOR MAIN.PY ---
-
 def setup_secret_wallet_handlers(bot=None):
-    """Initializer called by main.py to register wallet handlers."""
     pass
-
-
-# --- TELEGRAM COMMAND HANDLERS ---
 
 @bot.message_handler(commands=["setwager"])
 def handle_setwager(message: Message):
@@ -176,42 +163,3 @@ def handle_setwager(message: Message):
         bot.reply_to(message, f"✅ <b>Wager multiplier set to {WAGER_MULTIPLIER}x!</b>", parse_mode="HTML")
     except ValueError:
         bot.reply_to(message, "❌ Invalid number.")
-
-
-@bot.message_handler(commands=["bal", "wallet", "balance"])
-def handle_balance(message: Message):
-    from helpers import ensure_user
-    ensure_user(message)
-    user_id = message.from_user.id
-    bal = get_balance(user_id)
-
-    bot_username = bot.get_me().username
-    markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        InlineKeyboardButton("💳 Deposit", url=f"https://t.me/{bot_username}?start=deposit"),
-        InlineKeyboardButton("💸 Withdraw", url=f"https://t.me/{bot_username}?start=withdraw")
-    )
-
-    bot.reply_to(
-        message,
-        f"💳 <b>YOUR WALLET</b>\n\n💰 <b>Balance:</b> ₹{bal:.2f}",
-        parse_mode="HTML",
-        reply_markup=markup
-    )
-
-
-@bot.message_handler(commands=["depo", "deposit", "withdraw"])
-def handle_wallet_redirect(message: Message):
-    bot_username = bot.get_me().username
-    cmd = message.text.split()[0].replace("/", "").lower()
-
-    if message.chat.type != "private":
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("➡️ Open in DM", url=f"https://t.me/{bot_username}?start={cmd}"))
-        bot.reply_to(message, "📩 Click below to continue in private messages:", reply_markup=markup)
-        return
-
-    if cmd in ["depo", "deposit"]:
-        bot.reply_to(message, "💳 <b>Send the amount you wish to deposit:</b>", parse_mode="HTML")
-    else:
-        bot.reply_to(message, "💸 <b>Send the amount you wish to withdraw:</b>", parse_mode="HTML")
