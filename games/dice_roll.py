@@ -239,3 +239,6 @@ def handle_dr_callback(call: CallbackQuery):
         pass
 
     process_dice_bet(call.message.chat.id, user_id, amount, choice)
+# Backward compatibility aliases
+play_dice_roll = process_dice_bet
+handle_dice_roll = handle_dr_command
