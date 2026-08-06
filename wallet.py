@@ -62,7 +62,6 @@ def add_wager_requirement(telegram_id: int, amount: float):
         )
         conn.commit()
     except sqlite3.OperationalError:
-        # Fallback if wager_required column doesn't exist in DB schema yet
         pass
     conn.close()
 
@@ -98,6 +97,13 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
     )
     conn.commit()
     conn.close()
+
+
+# --- SETUP FUNCTION FOR MAIN.PY ---
+
+def setup_secret_wallet_handlers():
+    """Initializer called by main.py to register wallet handlers."""
+    pass
 
 
 # --- TELEGRAM COMMAND HANDLERS ---
