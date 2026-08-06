@@ -1,7 +1,6 @@
 import sqlite3
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from bot_instance import bot
-from helpers import ensure_user, is_admin
 
 # Default Wager Multiplier
 WAGER_MULTIPLIER = 1.0
@@ -12,6 +11,25 @@ def get_db_connection():
     conn = sqlite3.connect("database.db")
     conn.row_factory = sqlite3.Row
     return conn
+
+def get_or_create_user(telegram_id: int, username: str = None, first_name: str = None):
+    """Retrieves or registers a user in the database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+    user = cursor.fetchone()
+
+    if not user:
+        cursor.execute(
+            "INSERT INTO users (telegram_id, username, first_name, balance, is_bot) VALUES (?, ?, ?, ?, ?)",
+            (telegram_id, username, first_name, 100.0, 0)
+        )
+        conn.commit()
+        cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        user = cursor.fetchone()
+
+    conn.close()
+    return dict(user) if user else None
 
 def get_balance(user_id: int) -> float:
     conn = get_db_connection()
@@ -28,7 +46,8 @@ def adjust_balance(user_id: int, amount: float) -> float:
     conn.commit()
     
     cursor.execute("SELECT balance FROM users WHERE telegram_id = ?", (user_id,))
-    new_bal = cursor.fetchone()["balance"]
+    row = cursor.fetchone()
+    new_bal = row["balance"] if row else 0.0
     conn.close()
     return float(new_bal)
 
@@ -41,7 +60,7 @@ def get_house_balance() -> float:
     return float(row["house_bal"]) if row and row["house_bal"] else 100000.0
 
 def resolve_amount(user_id: int, amount_str: str) -> float | None:
-    amount_str = amount_str.lower().strip()
+    amount_str = str(amount_str).lower().strip()
     user_bal = get_balance(user_id)
 
     if amount_str in ["all", "max"]:
@@ -70,6 +89,7 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
 
 @bot.message_handler(commands=["setwager"])
 def handle_setwager(message: Message):
+    from helpers import is_admin
     global WAGER_MULTIPLIER
     if not is_admin(message.from_user.id):
         return
@@ -89,6 +109,7 @@ def handle_setwager(message: Message):
 
 @bot.message_handler(commands=["bal", "wallet", "balance"])
 def handle_balance(message: Message):
+    from helpers import ensure_user
     ensure_user(message)
     user_id = message.from_user.id
     bal = get_balance(user_id)
