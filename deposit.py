@@ -8,9 +8,9 @@ from db import has_permission, grant_permission, revoke_permission, get_all_perm
 
 MIN_DEPOSIT_AMOUNT = 30.0
 
-# --- USER STATE MANAGEMENT WITH RAW ERROR LOGGING ---
+# --- USER STATE MANAGEMENT ---
 
-def set_user_state(telegram_id: int, state: str):
+def init_state_db():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -20,11 +20,25 @@ def set_user_state(telegram_id: int, state: str):
                 state TEXT
             )
         """)
+        conn.commit()
+        conn.close()
+    except Exception:
+        print("\n--- RAW ERROR IN init_state_db ---")
+        traceback.print_exc()
+        print("-----------------------------------\n")
+
+# Run DB table creation on module load
+init_state_db()
+
+
+def set_user_state(telegram_id: int, state: str):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO user_states (telegram_id, state) VALUES (?, ?)", (telegram_id, state))
         conn.commit()
         conn.close()
-        print(f"DEBUG: State successfully set to '{state}' for user {telegram_id}")
-    except Exception as e:
+    except Exception:
         print("\n--- RAW ERROR IN set_user_state ---")
         traceback.print_exc()
         print("-----------------------------------\n")
@@ -37,10 +51,8 @@ def get_user_state(telegram_id: int) -> str | None:
         cursor.execute("SELECT state FROM user_states WHERE telegram_id = ?", (telegram_id,))
         row = cursor.fetchone()
         conn.close()
-        st = row["state"] if row else None
-        print(f"DEBUG: Checked state for user {telegram_id} -> {st}")
-        return st
-    except Exception as e:
+        return row["state"] if row else None
+    except Exception:
         print("\n--- RAW ERROR IN get_user_state ---")
         traceback.print_exc()
         print("-----------------------------------\n")
@@ -54,8 +66,7 @@ def clear_user_state(telegram_id: int):
         cursor.execute("DELETE FROM user_states WHERE telegram_id = ?", (telegram_id,))
         conn.commit()
         conn.close()
-        print(f"DEBUG: Cleared state for user {telegram_id}")
-    except Exception as e:
+    except Exception:
         print("\n--- RAW ERROR IN clear_user_state ---")
         traceback.print_exc()
         print("-------------------------------------\n")
@@ -66,7 +77,6 @@ def clear_user_state(telegram_id: int):
 @bot.message_handler(commands=["depo", "deposit"])
 def start_deposit(message: Message):
     try:
-        print(f"DEBUG: /deposit command triggered by {message.from_user.id}")
         if message.chat.type != "private":
             bot_username = bot.get_me().username
             markup = InlineKeyboardMarkup()
@@ -78,10 +88,10 @@ def start_deposit(message: Message):
         
         bot.reply_to(
             message, 
-            f"💳 <b>Send the amount you wish to deposit:</b>\n<i>(Minimum deposit: ₹{int(MIN_DEPOSIT_AMOUNT)})</i>", 
+            f"💳 <b>Send the amount you wish to deposit:</b>\n<i>Min deposit : 30rs</i>", 
             parse_mode="HTML"
         )
-    except Exception as e:
+    except Exception:
         print("\n--- RAW ERROR IN start_deposit ---")
         traceback.print_exc()
         print("----------------------------------\n")
@@ -94,7 +104,6 @@ def process_deposit_text(message: Message):
     try:
         user_id = message.from_user.id
         text = message.text.strip().lower()
-        print(f"DEBUG: Captured deposit text input '{text}' from user {user_id}")
 
         if text.startswith("/"):
             clear_user_state(user_id)
@@ -105,7 +114,7 @@ def process_deposit_text(message: Message):
         amount = float(clean_text) if clean_text else 0.0
         
         if amount < MIN_DEPOSIT_AMOUNT:
-            bot.reply_to(message, f"❌ <b>Minimum deposit is ₹{int(MIN_DEPOSIT_AMOUNT)}.</b> Please enter a valid amount.", parse_mode="HTML")
+            bot.reply_to(message, f"❌ <b>Min deposit : 30rs.</b> Please enter a valid amount.", parse_mode="HTML")
             return
 
         clear_user_state(user_id)
@@ -118,7 +127,7 @@ def process_deposit_text(message: Message):
         
         notify_deposit_managers(message.from_user, amount)
 
-    except Exception as e:
+    except Exception:
         print("\n--- RAW ERROR IN process_deposit_text ---")
         traceback.print_exc()
         print("-----------------------------------------\n")
@@ -146,12 +155,10 @@ def notify_deposit_managers(user, amount: float):
         for admin_id in all_managers:
             try:
                 bot.send_message(admin_id, msg_text, parse_mode="HTML", reply_markup=markup)
-            except Exception as inner_e:
-                print(f"\n--- RAW ERROR SENDING TO ADMIN {admin_id} ---")
-                traceback.print_exc()
-                print("-------------------------------------------\n")
+            except Exception:
+                pass
 
-    except Exception as e:
+    except Exception:
         print("\n--- RAW ERROR IN notify_deposit_managers ---")
         traceback.print_exc()
         print("--------------------------------------------\n")
@@ -199,7 +206,7 @@ def handle_deposit_action(call):
                 bot.send_message(target_user_id, f"❌ Your deposit request for ₹{amount:.2f} was declined.", parse_mode="HTML")
             except Exception:
                 pass
-    except Exception as e:
+    except Exception:
         print("\n--- RAW ERROR IN handle_deposit_action ---")
         traceback.print_exc()
         print("------------------------------------------\n")
@@ -237,7 +244,7 @@ def toggle_deposit_perm(message: Message):
         else:
             grant_permission(target_id, "deposit", granted_by=message.from_user.id)
             bot.reply_to(message, f"✅ Deposit permission <b>granted</b> for <code>{target_id}</code>.", parse_mode="HTML")
-    except Exception as e:
+    except Exception:
         print("\n--- RAW ERROR IN toggle_deposit_perm ---")
         traceback.print_exc()
         print("----------------------------------------\n")
