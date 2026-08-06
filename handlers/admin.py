@@ -4,10 +4,52 @@ from wallet import get_or_create_user, adjust_balance, resolve_amount
 from settings import (
     get_min_bet, set_min_bet,
     get_max_bet, set_max_bet,
-    get_house_edge, set_house_edge
+    get_house_edge, set_house_edge,
+    set_user_rig_status
 )
 from helpers import get_target_user
 from middleware.admin import is_admin, add_admin, remove_admin
+
+# ---------- Setwin Handler ----------
+
+@bot.message_handler(commands=["setwin"])
+def cmd_setwin(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "⚠️ Usage:\n/setwin <rate> (for all)\n/setwin <@username|telegram_id> <rate>")
+        return
+
+    if len(parts) == 2:
+        target = "all"
+        rate_str = parts[1]
+    else:
+        target_user = get_target_user(message, parts[1])
+        if not target_user:
+            bot.reply_to(message, "❌ User not found.")
+            return
+        target = str(target_user)
+        rate_str = parts[2]
+
+    try:
+        win_rate = float(rate_str.rstrip("%"))
+        if win_rate < 0 or win_rate > 100:
+            bot.reply_to(message, "❌ Rate must be between 0 and 100.")
+            return
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid rate percentage.")
+        return
+
+    set_user_rig_status(target, win_rate)
+
+    bot.reply_to(
+        message,
+        f"✅ <b>Setwin Updated!</b>\n🎯 <b>Target:</b> {target}\n🎲 <b>Target Win Rate:</b> {win_rate}%",
+        parse_mode="HTML"
+    )
 
 # ---------- Balance Management ----------
 
