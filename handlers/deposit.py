@@ -2,6 +2,7 @@ import re
 import traceback
 import sqlite3
 import io
+import requests
 import urllib.parse
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot_instance import bot
@@ -108,7 +109,6 @@ def is_deposit_allowed(telegram_id: int) -> bool:
 
 # --- COMMANDS & HANDLERS ---
 
-# Fix 1: Deposit Permission Command (/depositperm @username or ID toggle)
 @bot.message_handler(commands=["depositperm", "depperm"])
 def toggle_deposit_perm(message: Message):
     import helpers
@@ -162,7 +162,7 @@ def start_deposit(message: Message):
     )
 
 
-# Fix 2: Clean Inline QR Stream (No doc/file downloads)
+# RAW Image Bytes Stream Upload (Fixes QR download issue)
 @bot.message_handler(func=lambda m: m.chat.type == "private" and get_dep_state(m.from_user.id) and get_dep_state(m.from_user.id)["state"] == "WAITING_AMOUNT")
 def process_amount(message: Message):
     if message.text.startswith("/"):
@@ -195,7 +195,14 @@ def process_amount(message: Message):
         f"Tap the button below once you have paid."
     )
 
-    bot.send_photo(message.chat.id, photo=qr_url, caption=caption, parse_mode="HTML", reply_markup=markup)
+    try:
+        # Download image bytes dynamically
+        res = requests.get(qr_url)
+        img_io = io.BytesIO(res.content)
+        img_io.name = "qr.png"
+        bot.send_photo(message.chat.id, photo=img_io, caption=caption, parse_mode="HTML", reply_markup=markup)
+    except Exception:
+        bot.send_photo(message.chat.id, photo=qr_url, caption=caption, parse_mode="HTML", reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "dep_paid")
