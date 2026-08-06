@@ -95,6 +95,9 @@ import handlers.referral
 import handlers.tracking
 import handlers.broadcast
 
+# REGISTER DICE ROLL MODULE HERE
+import games.dice_roll
+
 # Catch-all text handlers should be imported LAST
 import handlers.basic
 
