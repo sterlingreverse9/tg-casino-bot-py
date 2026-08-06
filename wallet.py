@@ -97,6 +97,20 @@ def add_wager_requirement(telegram_id: int, amount: float):
         pass
     conn.close()
 
+def reduce_wager_requirement(telegram_id: int, bet_amount: float):
+    """Deducts bet_amount from wager_required."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE users SET wager_required = MAX(0.0, COALESCE(wager_required, 0) - ?) WHERE telegram_id = ?",
+            (bet_amount, telegram_id)
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    conn.close()
+
 def get_wager_remaining(telegram_id: int) -> float:
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -136,11 +150,16 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO bets (telegram_id, game, bet_amount, payout, result, meta) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO bets (telegram_id, game, bet_amount, payout, result, meta) VALUES (?, ?, ?, ?, ?, ?)",
         (telegram_id, game, bet_amount, payout, result, str(meta) if meta else "")
     )
     conn.commit()
     conn.close()
+
+    # ONLY REDUCE WAGER IF THE USER LOST THE BET
+    res_upper = str(result).upper()
+    if res_upper in ["LOSE", "LOSS"] or payout == 0:
+        reduce_wager_requirement(telegram_id, bet_amount)
 
 def setup_secret_wallet_handlers(bot=None):
     pass
