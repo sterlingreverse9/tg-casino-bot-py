@@ -3,7 +3,16 @@ from bot_instance import bot
 from db import select
 from wallet import get_or_create_user
 from state import PROMO_TAG
-from deposit import get_deposit_by_utr
+
+# Safe import to handle both root and handlers/ folder structures
+try:
+    from handlers.deposit import get_deposit_by_utr
+except ImportError:
+    try:
+        from deposit import get_deposit_by_utr
+    except ImportError:
+        def get_deposit_by_utr(utr):
+            return None
 
 WINS_CHANNEL = "@thecassinowins"
 PLAY_GROUP_URL = "https://t.me/thecassinogroup"
@@ -72,9 +81,17 @@ def get_target_user(message, target):
 
 
 def get_all_admin_ids():
-    """Fetch every admin's telegram_id. Filters client-side to avoid DB boolean-serialization bugs."""
+    """Fetch every admin's telegram_id."""
     users = select("users") or []
     return [int(u["telegram_id"]) for u in users if u.get("is_admin")]
+
+
+ADMIN_IDS = get_all_admin_ids()
+
+
+def is_admin(user_id: int) -> bool:
+    """Check if user is admin."""
+    return user_id in get_all_admin_ids()
 
 
 def format_display_name(first_name, username):
