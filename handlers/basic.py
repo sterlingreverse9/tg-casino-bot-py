@@ -8,6 +8,7 @@ from middleware.admin import is_admin
 from helpers import ensure_user, has_promo_tag, get_target_user
 from state import PROMO_TAG
 from referral import get_user_by_referral_code, set_referred_by, record_referral_join
+from handlers.deposit import get_user_state
 
 
 def build_welcome_text(name: str) -> str:
@@ -30,6 +31,12 @@ def build_welcome_keyboard():
 def cmd_start(message):
     parts = message.text.split()
     name = message.from_user.first_name or (message.from_user.username or "there")
+
+    # Handle Deep Linking for Deposits (/start deposit)
+    if len(parts) >= 2 and parts[1].lower() == "deposit":
+        from handlers.deposit import start_deposit
+        start_deposit(message)
+        return
 
     if len(parts) >= 2 and parts[1].startswith("ref-"):
         code = parts[1][4:]
@@ -97,9 +104,6 @@ def cmd_me(message):
         f"✅ Won: {user['total_won']}\n"
         f"❌ Lost: {user['total_lost']}",
     )
-
-
-# Note: cmd_wallet was removed from here to prevent overriding the image balance card in main.py
 
 
 @bot.message_handler(commands=["housebal", "house", "hb"])
