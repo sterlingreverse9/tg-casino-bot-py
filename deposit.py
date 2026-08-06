@@ -1,4 +1,5 @@
 import re
+import sqlite3
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot_instance import bot
 from wallet import adjust_balance, add_wager_requirement, get_db_connection
@@ -21,6 +22,7 @@ def set_user_state(telegram_id: int, state: str):
     conn.commit()
     conn.close()
 
+
 def get_user_state(telegram_id: int) -> str | None:
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -32,6 +34,7 @@ def get_user_state(telegram_id: int) -> str | None:
     except Exception:
         conn.close()
         return None
+
 
 def clear_user_state(telegram_id: int):
     conn = get_db_connection()
@@ -197,3 +200,19 @@ def toggle_deposit_perm(message: Message):
     else:
         grant_permission(target_id, "deposit", granted_by=message.from_user.id)
         bot.reply_to(message, f"✅ Deposit permission <b>granted</b> for <code>{target_id}</code>.", parse_mode="HTML")
+
+
+# --- HELPER COMPATIBILITY STUBS ---
+
+def get_deposit_by_utr(utr: str):
+    """Fallback stub to satisfy imports in helpers.py"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM deposits WHERE utr = ?", (utr,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception:
+        conn.close()
+        return None
