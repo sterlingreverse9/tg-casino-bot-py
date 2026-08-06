@@ -55,7 +55,7 @@ def cmd_setwin(message):
 
     args = message.text.split()
     if len(args) < 3:
-        bot.reply_to(message, "⚠️ Usage: <code>/setwin <user_id> <win|lose|reset></code>", parse_mode="HTML")
+        bot.reply_to(message, "⚠️ Usage: <code>/setwin &lt;user_id&gt; &lt;win|lose|reset&gt;</code>", parse_mode="HTML")
         return
 
     try:
@@ -77,21 +77,21 @@ def handle_game_init(message):
     ensure_user(message)
     sender_id = message.from_user.id
     sender_user = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
-    
+
     args = message.text.split()
     cmd = args[0].replace("/", "").lower()
-    
+
     # Defaults
     game_type = "dice" if cmd in ["pvp", "duel"] else cmd
     emoji = GAME_EMOJIS.get(game_type, "🎲")
-    
+
     amount_str = "10"
     rounds = 1
     target_user = None
 
     if cmd in ["pvp", "duel"]:
         if len(args) < 2:
-            bot.reply_to(message, "⚠️ Usage: <code>/pvp <amount> [game] [rounds] [@user]</code>", parse_mode="HTML")
+            bot.reply_to(message, "⚠️ Usage: <code>/pvp &lt;amount&gt; [game] [rounds] [@user]</code>", parse_mode="HTML")
             return
         amount_str = args[1]
         if len(args) >= 3 and args[2].lower() in GAME_EMOJIS:
@@ -130,7 +130,7 @@ def handle_game_init(message):
     # Case B: PVP Challenge against User
     adjust_balance(sender_id, -amount)
     challenge_id = create_challenge(sender_id, amount, game_type)
-    
+
     # Save extra metadata in pvp state
     challenge = get_challenge(challenge_id)
     challenge.update({
@@ -159,7 +159,7 @@ def handle_game_init(message):
         parse_mode="HTML",
         reply_markup=markup
     )
-    
+
     asyncio.run_coroutine_threadsafe(auto_cancel_timeout(msg.chat.id, msg.message_id, challenge_id), asyncio.get_event_loop())
 
 
@@ -258,7 +258,7 @@ def handle_pvp_callbacks(call):
             f"⚔️ <b>MATCH ACCEPTED!</b>\n{challenge['challenger_username']} vs {challenge['opponent_username']}\nStarting games...",
             challenge["chat_id"], call.message.message_id, parse_mode="HTML"
         )
-        
+
         run_pvp_match(challenge_id)
 
 
