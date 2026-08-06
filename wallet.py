@@ -51,6 +51,21 @@ def adjust_balance(user_id: int, amount: float) -> float:
     conn.close()
     return float(new_bal)
 
+def add_wager_requirement(telegram_id: int, amount: float):
+    """Adds to a user's required wagering balance upon deposit."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE users SET wager_required = COALESCE(wager_required, 0) + ? WHERE telegram_id = ?",
+            (amount * WAGER_MULTIPLIER, telegram_id)
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        # Fallback if wager_required column doesn't exist in DB schema yet
+        pass
+    conn.close()
+
 def get_house_balance() -> float:
     conn = get_db_connection()
     cursor = conn.cursor()
