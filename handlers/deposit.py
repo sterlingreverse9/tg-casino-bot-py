@@ -1,13 +1,15 @@
 import re
 import traceback
 import sqlite3
+import io
+import urllib.parse
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot_instance import bot
 from wallet import adjust_balance, add_wager_requirement, get_db_connection
 from db import select
 
 MIN_DEPOSIT_AMOUNT = 50.0
-UPI_ID = "piyushraao@fam"  # Apni UPI ID yahan check/update kar lein
+UPI_ID = "piyushraao@fam"
 
 # --- DATABASE SETUP ---
 
@@ -33,6 +35,12 @@ def init_deposit_db():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS deposit_permissions (
+                telegram_id INTEGER PRIMARY KEY,
+                allowed INTEGER DEFAULT 1
+            )
+        """)
         conn.commit()
         conn.close()
     except Exception:
@@ -40,7 +48,7 @@ def init_deposit_db():
 
 init_deposit_db()
 
-# --- STATE MANAGERS & COMPATIBILITY ALIASES ---
+# --- STATE MANAGERS & HELPER FUNCTIONS ---
 
 def set_dep_state(telegram_id: int, state: str, amount: float = 0.0, utr: str = None):
     conn = get_db_connection()
@@ -71,7 +79,7 @@ def clear_dep_state(telegram_id: int):
     conn.commit()
     conn.close()
 
-# Functions for basic.py compatibility
+# Compatibility Aliases for basic.py
 def get_user_state(telegram_id: int):
     st = get_dep_state(telegram_id)
     return st["state"] if st else None
@@ -90,10 +98,56 @@ def get_deposit_by_utr(utr: str):
     conn.close()
     return dict(row) if row else None
 
-# --- DEPOSIT HANDLERS ---
+def is_deposit_allowed(telegram_id: int) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT allowed FROM deposit_permissions WHERE telegram_id = ?", (telegram_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row["allowed"]) if row else True
+
+# --- COMMANDS & HANDLERS ---
+
+# Fix 1: Deposit Permission Command (/depositperm @username or ID toggle)
+@bot.message_handler(commands=["depositperm", "depperm"])
+def toggle_deposit_perm(message: Message):
+    import helpers
+    if not helpers.is_admin(message.from_user.id):
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "Usage: <code>/depositperm &lt;@username/user_id&gt;</code>", parse_mode="HTML")
+        return
+
+    target_user_id = helpers.get_target_user(message, args[1])
+    if not target_user_id:
+        bot.reply_to(message, "❌ User not found.")
+        return
+
+    current_status = is_deposit_allowed(target_user_id)
+    new_status = 0 if current_status else 1
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO deposit_permissions (telegram_id, allowed)
+        VALUES (?, ?)
+        ON CONFLICT(telegram_id) DO UPDATE SET allowed=excluded.allowed
+    """, (target_user_id, new_status))
+    conn.commit()
+    conn.close()
+
+    status_str = "ALLOWED ✅" if new_status else "BLOCKED ❌"
+    bot.reply_to(message, f"Deposit permission for <code>{target_user_id}</code> is now <b>{status_str}</b>.", parse_mode="HTML")
+
 
 @bot.message_handler(commands=["depo", "deposit"])
 def start_deposit(message: Message):
+    if not is_deposit_allowed(message.from_user.id):
+        bot.reply_to(message, "❌ Your deposit capability is currently disabled by admin.")
+        return
+
     if message.chat.type != "private":
         bot_username = bot.get_me().username
         markup = InlineKeyboardMarkup()
@@ -107,6 +161,8 @@ def start_deposit(message: Message):
         f"How many INR(₹) would you like to request? (min {int(MIN_DEPOSIT_AMOUNT)}, enter a number)"
     )
 
+
+# Fix 2: Clean Inline QR Stream (No doc/file downloads)
 @bot.message_handler(func=lambda m: m.chat.type == "private" and get_dep_state(m.from_user.id) and get_dep_state(m.from_user.id)["state"] == "WAITING_AMOUNT")
 def process_amount(message: Message):
     if message.text.startswith("/"):
@@ -126,8 +182,10 @@ def process_amount(message: Message):
 
     set_dep_state(message.from_user.id, "WAITING_PAYMENT_CONFIRM", amount=amount)
 
-    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=upi://pay?pa={UPI_ID}%26pn=Casino%26am={amount}%26cu=INR"
-    
+    upi_data = f"upi://pay?pa={UPI_ID}&pn=Casino&am={amount}&cu=INR"
+    encoded_upi = urllib.parse.quote(upi_data)
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={encoded_upi}"
+
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("✅ I Have Paid", callback_data="dep_paid"))
 
@@ -139,6 +197,7 @@ def process_amount(message: Message):
 
     bot.send_photo(message.chat.id, photo=qr_url, caption=caption, parse_mode="HTML", reply_markup=markup)
 
+
 @bot.callback_query_handler(func=lambda call: call.data == "dep_paid")
 def on_paid_click(call):
     st = get_dep_state(call.from_user.id)
@@ -149,6 +208,7 @@ def on_paid_click(call):
     set_dep_state(call.from_user.id, "WAITING_UTR")
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "Now enter your 12-digit UTR code:")
+
 
 @bot.message_handler(func=lambda m: m.chat.type == "private" and get_dep_state(m.from_user.id) and get_dep_state(m.from_user.id)["state"] == "WAITING_UTR")
 def process_utr(message: Message):
@@ -163,6 +223,7 @@ def process_utr(message: Message):
 
     set_dep_state(message.from_user.id, "WAITING_SCREENSHOT", utr=utr)
     bot.reply_to(message, "📸 Now send a screenshot to prove your payment.")
+
 
 @bot.message_handler(content_types=['photo'], func=lambda m: m.chat.type == "private" and get_dep_state(m.from_user.id) and get_dep_state(m.from_user.id)["state"] == "WAITING_SCREENSHOT")
 def process_screenshot(message: Message):
@@ -208,6 +269,7 @@ def process_screenshot(message: Message):
         except Exception:
             pass
 
+
 @bot.message_handler(commands=["approve"])
 def approve_deposit(message: Message):
     import helpers
@@ -252,6 +314,7 @@ def approve_deposit(message: Message):
         bot.send_message(target_user_id, user_text, parse_mode="HTML")
     except Exception:
         pass
+
 
 @bot.message_handler(commands=["decline"])
 def decline_deposit(message: Message):
