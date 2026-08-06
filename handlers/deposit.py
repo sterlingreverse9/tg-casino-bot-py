@@ -7,15 +7,14 @@ from wallet import adjust_balance, add_wager_requirement, get_db_connection
 from db import select
 
 MIN_DEPOSIT_AMOUNT = 50.0
-UPI_ID = "piyushraao@fam"  # Apni UPI ID yahan daalein
+UPI_ID = "piyushraao@fam"  # Apni UPI ID yahan check/update kar lein
 
-# --- DATABASE SETUP FOR DEPOSIT FLOW & STATES ---
+# --- DATABASE SETUP ---
 
 def init_deposit_db():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        # Active step tracking
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS deposit_states (
                 telegram_id INTEGER PRIMARY KEY,
@@ -24,7 +23,6 @@ def init_deposit_db():
                 utr TEXT
             )
         """)
-        # Deposit Requests DB
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS deposits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,6 +39,8 @@ def init_deposit_db():
         traceback.print_exc()
 
 init_deposit_db()
+
+# --- STATE MANAGERS & COMPATIBILITY ALIASES ---
 
 def set_dep_state(telegram_id: int, state: str, amount: float = 0.0, utr: str = None):
     conn = get_db_connection()
@@ -71,7 +71,26 @@ def clear_dep_state(telegram_id: int):
     conn.commit()
     conn.close()
 
-# --- STEP 1: /deposit COMMAND ---
+# Functions for basic.py compatibility
+def get_user_state(telegram_id: int):
+    st = get_dep_state(telegram_id)
+    return st["state"] if st else None
+
+def set_user_state(telegram_id: int, state: str):
+    set_dep_state(telegram_id, state)
+
+def clear_user_state(telegram_id: int):
+    clear_dep_state(telegram_id)
+
+def get_deposit_by_utr(utr: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM deposits WHERE utr = ?", (utr,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+# --- DEPOSIT HANDLERS ---
 
 @bot.message_handler(commands=["depo", "deposit"])
 def start_deposit(message: Message):
@@ -87,8 +106,6 @@ def start_deposit(message: Message):
         message,
         f"How many INR(₹) would you like to request? (min {int(MIN_DEPOSIT_AMOUNT)}, enter a number)"
     )
-
-# --- STEP 2: AMOUNT INPUT & SHOW QR CODE ---
 
 @bot.message_handler(func=lambda m: m.chat.type == "private" and get_dep_state(m.from_user.id) and get_dep_state(m.from_user.id)["state"] == "WAITING_AMOUNT")
 def process_amount(message: Message):
@@ -122,8 +139,6 @@ def process_amount(message: Message):
 
     bot.send_photo(message.chat.id, photo=qr_url, caption=caption, parse_mode="HTML", reply_markup=markup)
 
-# --- STEP 3: "I HAVE PAID" BUTTON CLICK ---
-
 @bot.callback_query_handler(func=lambda call: call.data == "dep_paid")
 def on_paid_click(call):
     st = get_dep_state(call.from_user.id)
@@ -134,8 +149,6 @@ def on_paid_click(call):
     set_dep_state(call.from_user.id, "WAITING_UTR")
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "Now enter your 12-digit UTR code:")
-
-# --- STEP 4: UTR CODE INPUT ---
 
 @bot.message_handler(func=lambda m: m.chat.type == "private" and get_dep_state(m.from_user.id) and get_dep_state(m.from_user.id)["state"] == "WAITING_UTR")
 def process_utr(message: Message):
@@ -151,8 +164,6 @@ def process_utr(message: Message):
     set_dep_state(message.from_user.id, "WAITING_SCREENSHOT", utr=utr)
     bot.reply_to(message, "📸 Now send a screenshot to prove your payment.")
 
-# --- STEP 5: SCREENSHOT SUBMISSION & ADMIN NOTIFICATION ---
-
 @bot.message_handler(content_types=['photo'], func=lambda m: m.chat.type == "private" and get_dep_state(m.from_user.id) and get_dep_state(m.from_user.id)["state"] == "WAITING_SCREENSHOT")
 def process_screenshot(message: Message):
     st = get_dep_state(message.from_user.id)
@@ -160,7 +171,6 @@ def process_screenshot(message: Message):
     amount = st["amount"]
     utr = st["utr"]
 
-    # Save to SQLite DB
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -179,8 +189,8 @@ def process_screenshot(message: Message):
 
     bot.reply_to(message, "⏳ <b>Your deposit request has been sent to the admins for approval.</b>", parse_mode="HTML")
 
-    # Send Notification to Admins
-    from helpers import ADMIN_IDS
+    import helpers
+    admin_ids = helpers.get_all_admin_ids()
     photo_file_id = message.photo[-1].file_id
 
     admin_msg = (
@@ -192,18 +202,16 @@ def process_screenshot(message: Message):
         f"<code>/decline {utr} &lt;reason&gt;</code>"
     )
 
-    for admin_id in ADMIN_IDS:
+    for admin_id in admin_ids:
         try:
             bot.send_photo(admin_id, photo=photo_file_id, caption=admin_msg, parse_mode="HTML")
         except Exception:
             pass
 
-# --- STEP 6: ADMIN COMMANDS (/approve & /decline) ---
-
 @bot.message_handler(commands=["approve"])
 def approve_deposit(message: Message):
-    from helpers import is_admin
-    if not is_admin(message.from_user.id):
+    import helpers
+    if not helpers.is_admin(message.from_user.id):
         return
 
     args = message.text.split()
@@ -230,14 +238,11 @@ def approve_deposit(message: Message):
     conn.commit()
     conn.close()
 
-    # Balance Update & Wager Addition
     new_bal = adjust_balance(target_user_id, amount)
     add_wager_requirement(target_user_id, amount)
 
-    # Admin Response
     bot.reply_to(message, f"✅ Approved. Credited ₹{amount} to user {target_user_id}.")
 
-    # User DM Notification
     try:
         user_text = (
             f"✅ <b>Your deposit request was approved!</b>\n"
@@ -250,8 +255,8 @@ def approve_deposit(message: Message):
 
 @bot.message_handler(commands=["decline"])
 def decline_deposit(message: Message):
-    from helpers import is_admin
-    if not is_admin(message.from_user.id):
+    import helpers
+    if not helpers.is_admin(message.from_user.id):
         return
 
     args = message.text.split(maxsplit=2)
