@@ -21,9 +21,9 @@ LABELS = {
 
 
 def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: str, display_name: str = None):
-    choice = choice.lower()
+    choice = str(choice).lower().strip()
     if choice not in ALL_CHOICES:
-        bot.send_message(chat_id, "Invalid choice. Use high, low, even, odd, or a number 1-6.")
+        bot.send_message(chat_id, "⚠️ Invalid choice. Pick high, low, even, odd, or a number 1-6.")
         return
 
     balance = get_balance(telegram_id)
@@ -31,33 +31,39 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
     max_bet = get_max_bet(get_house_balance())
 
     if bet_amount < min_bet:
-        bot.send_message(chat_id, f"Minimum bet is {min_bet} coins.")
+        bot.send_message(chat_id, f"⚠️ Minimum bet is ₹{min_bet:.2f}.")
         return
     if bet_amount > max_bet:
-        bot.send_message(chat_id, f"Maximum bet is {round(max_bet, 2)} coins.")
+        bot.send_message(chat_id, f"⚠️ Maximum bet is ₹{round(max_bet, 2):.2f}.")
         return
     if bet_amount > balance:
-        bot.send_message(chat_id, f"Not enough balance. Your balance: {balance}")
+        bot.send_message(chat_id, f"❌ Insufficient balance! Your balance: ₹{balance:.2f}")
         return
 
+    # 1. Deduct bet amount upfront
     adjust_balance(telegram_id, -bet_amount)
 
+    # 2. Roll Telegram dice directly
     dice_message = bot.send_dice(chat_id, emoji="🎲")
     roll = dice_message.dice.value
 
+    # 3. Explicit evaluation check
+    won = False
     if choice in EVEN_MONEY_CHOICES:
         won = roll in EVEN_MONEY_CHOICES[choice]
         win_chance = 0.5
         label = LABELS[choice]
     else:
-        won = roll == int(choice)
+        won = (roll == int(choice))
         win_chance = 1 / 6
         label = f"Number {choice}"
 
-    payout = payout_for(bet_amount, win_chance) if won else 0
+    # 4. Calculate Payout
+    payout = payout_for(bet_amount, win_chance) if won else 0.0
     if won:
         adjust_balance(telegram_id, payout)
 
+    # 5. Record bet in database
     record_bet(
         telegram_id=telegram_id,
         game="dice_roll",
@@ -68,14 +74,31 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
     )
 
     new_balance = get_balance(telegram_id)
+    user_label = display_name or f"ID: {telegram_id}"
+
     if won:
         bot.send_message(
             chat_id,
-            f"🎲 Rolled {roll}!\nYou bet on {label}\n✅ You won ₹{payout} !\nBalance: ₹{new_balance}",
+            f"⚡ <b>Dice Roll (DR) • ₹{bet_amount:.2f}</b>\n\n"
+            f"👤 <b>Player:</b> {user_label} 🎲\n"
+            f"🎯 <b>Choice:</b> {label}\n"
+            f"🎲 <b>Outcome:</b> {roll}\n\n"
+            f"🎉 <b>You Won ₹{payout:.2f}!</b>\n"
+            f"💰 <b>Balance:</b> ₹{new_balance:.2f}",
+            parse_mode="HTML"
         )
-        announce_win(display_name or str(telegram_id), payout, "Dice Roll")
+        try:
+            announce_win(display_name or str(telegram_id), payout, "Dice Roll")
+        except Exception:
+            pass
     else:
         bot.send_message(
             chat_id,
-            f"🎲 Rolled {roll}!\nYou bet on {label}\n❌ You lost ₹{bet_amount}.\nBalance: ₹{new_balance}",
+            f"⚡ <b>Dice Roll (DR) • ₹{bet_amount:.2f}</b>\n\n"
+            f"👤 <b>Player:</b> {user_label} 🎲\n"
+            f"🎯 <b>Choice:</b> {label}\n"
+            f"🎲 <b>Outcome:</b> {roll}\n\n"
+            f"❌ <b>You Lost ₹{bet_amount:.2f}</b>\n"
+            f"💰 <b>Balance:</b> ₹{new_balance:.2f}",
+            parse_mode="HTML"
         )
