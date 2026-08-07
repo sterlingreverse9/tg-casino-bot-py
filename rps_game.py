@@ -20,50 +20,61 @@ active_rps_games = {}
 def fetch_configured_win_rate(user_id: int) -> float | None:
     rate = None
 
-    # Check admin module
-    try:
-        import admin
-        if hasattr(admin, "get_user_win_rate"):
-            rate = admin.get_user_win_rate(user_id)
-            print(f"[RPS DEBUG] admin.get_user_win_rate({user_id}) returned: {rate}", file=sys.stderr)
-        elif hasattr(admin, "WIN_RATES") and user_id in admin.WIN_RATES:
-            rate = admin.WIN_RATES[user_id]
-            print(f"[RPS DEBUG] admin.WIN_RATES[{user_id}] returned: {rate}", file=sys.stderr)
-        elif hasattr(admin, "WIN_RATES") and "all" in admin.WIN_RATES:
-            rate = admin.WIN_RATES["all"]
-            print(f"[RPS DEBUG] admin.WIN_RATES['all'] returned: {rate}", file=sys.stderr)
-    except Exception as e:
-        print(f"[RPS DEBUG ERROR] Admin check failed: {e}", file=sys.stderr)
+    # 1. Check admin / admin_handlers module
+    for mod_name in ["admin", "admin_handlers"]:
+        try:
+            mod = __import__(mod_name)
+            if hasattr(mod, "get_user_win_rate"):
+                rate = mod.get_user_win_rate(user_id)
+            elif hasattr(mod, "WIN_RATES"):
+                rates = getattr(mod, "WIN_RATES")
+                if isinstance(rates, dict):
+                    rate = rates.get(user_id, rates.get("all"))
+            if rate is not None:
+                print(f"[RPS DEBUG] Found win rate in {mod_name}: {rate}", file=sys.stderr)
+                break
+        except ImportError:
+            pass
+        except Exception as e:
+            print(f"[RPS DEBUG ERROR] {mod_name} check failed: {e}", file=sys.stderr)
 
-    # Check helpers module
+    # 2. Check helpers module
     if rate is None:
         try:
             import helpers
             if hasattr(helpers, "get_user_win_rate"):
                 rate = helpers.get_user_win_rate(user_id)
-                print(f"[RPS DEBUG] helpers.get_user_win_rate({user_id}) returned: {rate}", file=sys.stderr)
-            elif hasattr(helpers, "WIN_RATES") and user_id in helpers.WIN_RATES:
-                rate = helpers.WIN_RATES[user_id]
-                print(f"[RPS DEBUG] helpers.WIN_RATES[{user_id}] returned: {rate}", file=sys.stderr)
-            elif hasattr(helpers, "WIN_RATES") and "all" in helpers.WIN_RATES:
-                rate = helpers.WIN_RATES["all"]
-                print(f"[RPS DEBUG] helpers.WIN_RATES['all'] returned: {rate}", file=sys.stderr)
+            elif hasattr(helpers, "WIN_RATES"):
+                rates = getattr(helpers, "WIN_RATES")
+                if isinstance(rates, dict):
+                    rate = rates.get(user_id, rates.get("all"))
+            if rate is not None:
+                print(f"[RPS DEBUG] Found win rate in helpers: {rate}", file=sys.stderr)
         except Exception as e:
             print(f"[RPS DEBUG ERROR] Helpers check failed: {e}", file=sys.stderr)
 
-    # Check SQLite Database
+    # 3. Check SQLite Database (Auto-patches 'win_rate' column if missing)
     if rate is None:
         try:
             import sqlite3
             conn = sqlite3.connect("database.db")
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
+
+            try:
+                cursor.execute("ALTER TABLE users ADD COLUMN win_rate REAL")
+                conn.commit()
+                print("[RPS DEBUG] Patched missing 'win_rate' column in database.db", file=sys.stderr)
+            except sqlite3.OperationalError:
+                pass  # Column exists
+
             cursor.execute("SELECT win_rate FROM users WHERE telegram_id = ?", (user_id,))
             row = cursor.fetchone()
             conn.close()
+
             if row and row["win_rate"] is not None:
                 rate = row["win_rate"]
-                print(f"[RPS DEBUG] DB win_rate for {user_id} returned: {rate}", file=sys.stderr)
+                print(f"[RPS DEBUG] Found DB win_rate for {user_id}: {rate}", file=sys.stderr)
         except Exception as e:
             print(f"[RPS DEBUG ERROR] DB check failed: {e}", file=sys.stderr)
 
@@ -280,10 +291,10 @@ def callback_make_move(call: CallbackQuery):
         if win_rate is not None:
             if win_rate <= 0.0:
                 game["opponent_choice"] = COUNTER_WIN[move]
-                print(f"[RPS DEBUG] FORCED LOSS: User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
+                print(f"[RPS DEBUG] FORCED LOSS (Rate {win_rate}): User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
             elif win_rate >= 1.0:
                 game["opponent_choice"] = COUNTER_LOSE[move]
-                print(f"[RPS DEBUG] FORCED WIN: User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
+                print(f"[RPS DEBUG] FORCED WIN (Rate {win_rate}): User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
             else:
                 if random.random() < win_rate:
                     game["opponent_choice"] = COUNTER_LOSE[move]
@@ -332,7 +343,7 @@ def resolve_rps_game(chat_id: int, message_id: int):
             adjust_balance(winner_id, payout)
             record_bet(winner_id, "rps", bet, payout, "WIN")
 
-            # Debug win updates channel sending
+            # Try triggering win updates broadcast across modules
             try:
                 import helpers
                 found_func = False
@@ -351,10 +362,9 @@ def resolve_rps_game(chat_id: int, message_id: int):
                         break
 
                 if not found_func:
-                    print("[RPS DEBUG ERROR] Could not find win broadcast function in helpers.py!", file=sys.stderr)
+                    print("[RPS DEBUG ERROR] No win update function found in helpers.py", file=sys.stderr)
             except Exception as e:
-                print(f"[RPS DEBUG ERROR] Exception while broadcasting win: {e}", file=sys.stderr)
-                traceback.print_exc()
+                print(f"[RPS DEBUG ERROR] Win broadcast failed: {e}", file=sys.stderr)
 
         if loser_id != 0:
             record_bet(loser_id, "rps", bet, 0.0, "LOSE")
