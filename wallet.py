@@ -126,6 +126,19 @@ def resolve_amount(user_id: int, amount_str: str) -> float | None:
     except ValueError:
         return None
 
+def add_wager_requirement(telegram_id: int, amount: float):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE users SET wager_required = COALESCE(wager_required, 0) + ? WHERE telegram_id = ?",
+            (amount, telegram_id)
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    conn.close()
+
 def reduce_wager_requirement(telegram_id: int, bet_amount: float):
     conn = get_db_connection()
     cursor = conn.cursor()
