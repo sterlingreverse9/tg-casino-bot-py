@@ -1,7 +1,7 @@
 import requests
 from config import SUPABASE_URL, SUPABASE_SERVICE_KEY
 
-BASE = f"{SUPABASE_URL}/rest/v1"
+BASE = f"{SUPABASE_URL.rstrip('/')}/rest/v1"
 HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
     "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
@@ -29,7 +29,8 @@ def select(table, filters=None, order=None, desc=False, limit=None, single=False
             return data[0] if data else None
         return data
     except Exception as e:
-        print(f"[Supabase Select Error on {table}]: {e}")
+        err_msg = resp.text if 'resp' in locals() and resp is not None else str(e)
+        print(f"[Supabase Select Error on {table}]: {err_msg}")
         return None if single else []
 
 
@@ -40,48 +41,59 @@ def insert(table, row):
         data = resp.json()
         return data[0] if data else None
     except Exception as e:
-        print(f"[Supabase Insert Error on {table}]: {e}")
+        err_msg = resp.text if 'resp' in locals() and resp is not None else str(e)
+        print(f"[Supabase Insert Error on {table}]: {err_msg}")
         return None
 
 
-def update(table, filters, values):
+def update(table, filters=None, values=None):
+    if values is None:
+        return None
     params = {}
-    for k, v in filters.items():
-        params[k] = f"eq.{v}"
+    if filters:
+        for k, v in filters.items():
+            params[k] = f"eq.{v}"
     try:
         resp = requests.patch(f"{BASE}/{table}", headers=HEADERS, params=params, json=values)
         resp.raise_for_status()
         data = resp.json()
         return data[0] if data else None
     except Exception as e:
-        print(f"[Supabase Update Error on {table}]: {e}")
+        err_msg = resp.text if 'resp' in locals() and resp is not None else str(e)
+        print(f"[Supabase Update Error on {table}]: {err_msg}")
         return None
 
 
 def delete(table, filters):
     params = {}
-    for k, v in filters.items():
-        params[k] = f"eq.{v}"
+    if filters:
+        for k, v in filters.items():
+            params[k] = f"eq.{v}"
     try:
         resp = requests.delete(f"{BASE}/{table}", headers=HEADERS, params=params)
         resp.raise_for_status()
         return True
     except Exception as e:
-        print(f"[Supabase Delete Error on {table}]: {e}")
+        err_msg = resp.text if 'resp' in locals() and resp is not None else str(e)
+        print(f"[Supabase Delete Error on {table}]: {err_msg}")
         return False
 
 
-def upsert(table, row, on_conflict="chat_id"):
-    """Insert or update on primary key conflict using Supabase resolution headers."""
+def upsert(table, row, on_conflict=None):
+    """Insert or update on primary key / target column conflict using Supabase resolution headers."""
     headers = HEADERS.copy()
-    headers["Prefer"] = f"resolution=merge-duplicates,return=representation"
+    headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+    params = {}
+    if on_conflict:
+        params["on_conflict"] = on_conflict
     try:
-        resp = requests.post(f"{BASE}/{table}", headers=headers, json=row)
+        resp = requests.post(f"{BASE}/{table}", headers=headers, params=params, json=row)
         resp.raise_for_status()
         data = resp.json()
         return data[0] if data else None
     except Exception as e:
-        print(f"[Supabase Upsert Error on {table}]: {e}")
+        err_msg = resp.text if 'resp' in locals() and resp is not None else str(e)
+        print(f"[Supabase Upsert Error on {table}]: {err_msg}")
         return None
 
 
