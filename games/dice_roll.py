@@ -23,7 +23,7 @@ LABELS = {
 def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: str, display_name: str = None):
     choice = str(choice).lower().strip()
     if choice not in ALL_CHOICES:
-        bot.send_message(chat_id, "⚠️ Invalid choice. Pick high, low, even, odd, or a number 1-6.")
+        bot.send_message(chat_id, "⚠️ Invalid choice. Use high, low, even, odd, or a number 1-6.")
         return
 
     balance = get_balance(telegram_id)
@@ -40,14 +40,11 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
         bot.send_message(chat_id, f"❌ Insufficient balance! Your balance: ₹{balance:.2f}")
         return
 
-    # 1. Deduct bet amount upfront
     adjust_balance(telegram_id, -bet_amount)
 
-    # 2. Roll Telegram dice directly
     dice_message = bot.send_dice(chat_id, emoji="🎲")
-    roll = dice_message.dice.value
+    roll = int(dice_message.dice.value)
 
-    # 3. Explicit evaluation check
     won = False
     if choice in EVEN_MONEY_CHOICES:
         won = roll in EVEN_MONEY_CHOICES[choice]
@@ -58,12 +55,10 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
         win_chance = 1 / 6
         label = f"Number {choice}"
 
-    # 4. Calculate Payout
     payout = payout_for(bet_amount, win_chance) if won else 0.0
     if won:
         adjust_balance(telegram_id, payout)
 
-    # 5. Record bet in database
     record_bet(
         telegram_id=telegram_id,
         game="dice_roll",
