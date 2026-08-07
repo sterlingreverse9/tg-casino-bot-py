@@ -9,13 +9,13 @@ def play_animated_game(bot, message, telegram_id: int, bet_amount: float, game_t
     max_bet = get_max_bet(get_house_balance())
 
     if bet_amount < min_bet:
-        bot.reply_to(message, f"Minimum bet is ₹{min_bet}.")
+        bot.reply_to(message, f"⚠️ Minimum bet is ₹{min_bet:.2f}.")
         return
     if bet_amount > max_bet:
-        bot.reply_to(message, f"Maximum bet is ₹{round(max_bet, 2)}.")
+        bot.reply_to(message, f"⚠️ Maximum bet is ₹{round(max_bet, 2):.2f}.")
         return
     if bet_amount > balance:
-        bot.reply_to(message, f"Not enough balance. Your balance: ₹{balance:.2f}")
+        bot.reply_to(message, f"❌ Insufficient balance. Your balance: ₹{balance:.2f}")
         return
 
     adjust_balance(telegram_id, -bet_amount)
@@ -78,6 +78,7 @@ def play_animated_game(bot, message, telegram_id: int, bet_amount: float, game_t
         meta={"dice_value": dice_value, "multiplier": multiplier},
     )
 
+    # Allow animation to complete on Telegram client UI
     time.sleep(3)
 
     new_balance = get_balance(telegram_id)
