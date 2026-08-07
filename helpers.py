@@ -1,4 +1,7 @@
+import sys
 import html
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 from bot_instance import bot
 from db import select
 from wallet import get_or_create_user
@@ -34,8 +37,9 @@ def set_user_frozen(user_id: int, freeze: bool):
         FROZEN_USERS.discard(user_id)
 
 
-# Expanded to cover all native Telegram animated games
+# Expanded to cover all native Telegram animated games & custom mini-games
 GAME_EMOJIS = {
+    "RPS ✊✌️✋": "✊",
     "Coinflip": "🪙",
     "Dice Roll": "🎲",
     "Darts": "🎯",
@@ -81,12 +85,13 @@ def get_target_user(message, target):
 
 
 def get_all_admin_ids():
-    """Fetch every admin's telegram_id."""
-    users = select("users") or []
-    return [int(u["telegram_id"]) for u in users if u.get("is_admin")]
-
-
-ADMIN_IDS = get_all_admin_ids()
+    """Fetch every admin's telegram_id dynamically from DB."""
+    try:
+        users = select("users") or []
+        return [int(u["telegram_id"]) for u in users if u.get("is_admin")]
+    except Exception as e:
+        print(f"[HELPERS DEBUG ERROR] Failed to fetch admin IDs: {e}", file=sys.stderr)
+        return []
 
 
 def is_admin(user_id: int) -> bool:
@@ -100,19 +105,56 @@ def format_display_name(first_name, username):
     return first_name or "Player"
 
 
-def announce_win(name: str, amount: float, game_label: str):
-    from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-    emoji = GAME_EMOJIS.get(game_label, "🎰")
-    safe_name = html.escape(name)
-    text = f"🎉 <b>{safe_name}</b> just won <b>₹{amount:.2f}</b> in <b>{game_label}</b> {emoji}!"
+def announce_win(*args, **kwargs):
+    """
+    Flexible win broadcast function.
+    Accepts positional/keyword calls from rps_game.py, games, or legacy scripts.
+    """
+    user_id = kwargs.get("user_id")
+    user_name = kwargs.get("user_name")
+    game_name = kwargs.get("game_name")
+    bet = kwargs.get("bet", 0.0)
+    payout = kwargs.get("payout", 0.0)
+    multiplier = kwargs.get("multiplier", 1.0)
+
+    # Legacy positional fallback (name, amount, game_label)
+    if not user_name and len(args) > 0:
+        user_name = args[0]
+    if payout == 0.0 and len(args) > 1:
+        payout = args[1]
+    if not game_name and len(args) > 2:
+        game_name = args[2]
+
+    if not user_name:
+        user_name = "Player"
+    if not game_name:
+        game_name = "Casino Game"
+
+    emoji = GAME_EMOJIS.get(game_name, "🎰")
+    safe_name = html.escape(str(user_name))
+
+    text = (
+        f"🎉 <b>BIG WIN!</b> {emoji}\n\n"
+        f"👤 <b>Player:</b> {safe_name}\n"
+        f"🎮 <b>Game:</b> {game_name}\n"
+        f"💵 <b>Bet:</b> ₹{bet:.2f}\n"
+        f"🚀 <b>Multiplier:</b> x{multiplier:.2f}\n"
+        f"💰 <b>Payout:</b> ₹{payout:.2f}"
+    )
 
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("▶️ Play Here", url=PLAY_GROUP_URL))
+
     try:
         bot.send_message(WINS_CHANNEL, text, reply_markup=markup, parse_mode="HTML")
-        print("[DEBUG] Win announcement sent")
+        print(f"[HELPERS DEBUG] Win announcement successfully posted to {WINS_CHANNEL}", file=sys.stderr)
     except Exception as e:
-        print(f"Failed to post win announcement: {e}")
+        print(f"[HELPERS DEBUG ERROR] Failed to post win announcement: {e}", file=sys.stderr)
+
+
+# Alias functions to ensure full compatibility with dynamic checkers
+send_win_update = announce_win
+post_win_update = announce_win
 
 
 def is_member_of(channel: str, telegram_id: int) -> bool:
