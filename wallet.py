@@ -1,11 +1,12 @@
 import sqlite3
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from bot_instance import bot
 
-# Default Wager Multiplier
+# Banner Image URL (Replace with your custom hosted banner URL if needed)
+CARD_IMAGE_URL = "https://i.ibb.co/L9vXGzq/casino-wallet-banner.jpg"
 WAGER_MULTIPLIER = 1.0
 
-# --- CORE WALLET DATABASE & UTILITY FUNCTIONS ---
+# --- CORE DATABASE FUNCTIONS ---
 
 def get_db_connection():
     conn = sqlite3.connect("database.db")
@@ -13,10 +14,8 @@ def get_db_connection():
     return conn
 
 def init_db():
-    """Creates necessary database tables if they do not exist."""
     conn = get_db_connection()
     cursor = conn.cursor()
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
@@ -24,10 +23,10 @@ def init_db():
             first_name TEXT,
             balance REAL DEFAULT 100.0,
             wager_required REAL DEFAULT 0.0,
-            is_bot INTEGER DEFAULT 0
+            is_bot INTEGER DEFAULT 0,
+            is_admin INTEGER DEFAULT 0
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS bets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +39,6 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-
     conn.commit()
     conn.close()
 
@@ -77,38 +75,11 @@ def adjust_balance(user_id: int, amount: float) -> float:
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, user_id))
     conn.commit()
-
     cursor.execute("SELECT balance FROM users WHERE telegram_id = ?", (user_id,))
     row = cursor.fetchone()
     new_bal = row["balance"] if row else 0.0
     conn.close()
     return float(new_bal)
-
-def add_wager_requirement(telegram_id: int, amount: float):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "UPDATE users SET wager_required = COALESCE(wager_required, 0) + ? WHERE telegram_id = ?",
-            (amount * WAGER_MULTIPLIER, telegram_id)
-        )
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-    conn.close()
-
-def reduce_wager_requirement(telegram_id: int, bet_amount: float):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "UPDATE users SET wager_required = MAX(0.0, COALESCE(wager_required, 0) - ?) WHERE telegram_id = ?",
-            (bet_amount, telegram_id)
-        )
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-    conn.close()
 
 def get_wager_remaining(telegram_id: int) -> float:
     conn = get_db_connection()
@@ -122,28 +93,31 @@ def get_wager_remaining(telegram_id: int) -> float:
         conn.close()
         return 0.0
 
-def get_house_balance() -> float:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT SUM(balance) as house_bal FROM users WHERE is_bot = 1")
-    row = cursor.fetchone()
-    conn.close()
-    return float(row["house_bal"]) if row and row["house_bal"] else 100000.0
-
 def resolve_amount(user_id: int, amount_str: str) -> float | None:
     amount_str = str(amount_str).lower().strip()
     user_bal = get_balance(user_id)
-
     if amount_str in ["all", "max"]:
         return user_bal
     if amount_str in ["half", "50%"]:
         return user_bal / 2.0
-
     try:
         val = float(amount_str)
         return val if val > 0 else None
     except ValueError:
         return None
+
+def reduce_wager_requirement(telegram_id: int, bet_amount: float):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE users SET wager_required = MAX(0.0, COALESCE(wager_required, 0) - ?) WHERE telegram_id = ?",
+            (bet_amount, telegram_id)
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    conn.close()
 
 def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, result: str, meta: dict = None):
     conn = get_db_connection()
@@ -160,14 +134,14 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
         reduce_wager_requirement(telegram_id, bet_amount)
 
 
-# ---------- COMMAND HANDLERS ----------
+# ---------- HANDLERS & CALLBACKS ----------
 
-# Wallet Commands (/wallet, /bal, /balance)
+# /wallet, /bal, /balance with Image Card
 @bot.message_handler(commands=["wallet", "bal", "balance"])
 def handle_wallet(message: Message):
     user = message.from_user
     get_or_create_user(user.id, user.username, user.first_name)
-    
+
     bal = get_balance(user.id)
     wager = get_wager_remaining(user.id)
 
@@ -184,13 +158,47 @@ def handle_wallet(message: Message):
         InlineKeyboardButton("🏧 Withdraw", callback_data="withdraw")
     )
 
-    bot.reply_to(message, text, parse_mode="HTML", reply_markup=markup)
+    try:
+        # Tries sending card photo first
+        bot.send_photo(message.chat.id, photo=CARD_IMAGE_URL, caption=text, parse_mode="HTML", reply_markup=markup)
+    except Exception:
+        # Fallback to text if photo fails
+        bot.reply_to(message, text, parse_mode="HTML", reply_markup=markup)
 
 
-# Tip Command (/tip)
+# Inline Button Handlers for Deposit & Withdraw
+@bot.callback_query_handler(func=lambda call: call.data in ["deposit", "withdraw"])
+def handle_wallet_callbacks(call: CallbackQuery):
+    bot.answer_callback_query(call.id)
+    user_id = call.from_user.id
+
+    if call.data == "deposit":
+        msg = (
+            "💳 <b>Deposit Funds</b>\n\n"
+            "To deposit funds into your casino wallet, contact the cashier or admin directly:\n"
+            "👨‍💻 <b>Admin Support:</b> @mrpuppyx"
+        )
+        bot.send_message(call.message.chat.id, msg, parse_mode="HTML")
+
+    elif call.data == "withdraw":
+        bal = get_balance(user_id)
+        wager = get_wager_remaining(user_id)
+
+        if wager > 0:
+            msg = f"⚠️ <b>Withdrawal Locked!</b>\nYou still have ₹{wager:.2f} remaining wager requirement to complete before withdrawing."
+        else:
+            msg = (
+                f"🏧 <b>Withdraw Request</b>\n\n"
+                f"Available Balance: ₹{bal:.2f}\n"
+                "Please message @mrpuppyx to process your payout."
+            )
+        bot.send_message(call.message.chat.id, msg, parse_mode="HTML")
+
+
+# /tip Command
 @bot.message_handler(commands=["tip"])
 def handle_tip(message: Message):
-    from helpers import get_target_user  # Inside handler to avoid circular import
+    from helpers import get_target_user
 
     sender_id = message.from_user.id
     get_or_create_user(sender_id, message.from_user.username, message.from_user.first_name)
@@ -207,27 +215,23 @@ def handle_tip(message: Message):
         amount_str = parts[1]
     else:
         if len(parts) < 3:
-            bot.reply_to(message, "⚠️ Usage: <code>/tip <@user|id> <amount|all></code> or reply to user.", parse_mode="HTML")
+            bot.reply_to(message, "⚠️ Usage: <code>/tip <@user|id> <amount|all></code>", parse_mode="HTML")
             return
         target_id = get_target_user(message, parts[1])
         amount_str = parts[2]
 
-    if not target_id:
-        bot.reply_to(message, "❌ Target user not found.")
-        return
-
-    if target_id == sender_id:
-        bot.reply_to(message, "❌ You cannot tip yourself.")
+    if not target_id or target_id == sender_id:
+        bot.reply_to(message, "❌ Invalid target user.")
         return
 
     amount = resolve_amount(sender_id, amount_str)
     if amount is None or amount <= 0:
-        bot.reply_to(message, "❌ Invalid tip amount or insufficient funds.")
+        bot.reply_to(message, "❌ Invalid amount.")
         return
 
     sender_bal = get_balance(sender_id)
     if sender_bal < amount:
-        bot.reply_to(message, f"❌ Insufficient balance. Your balance: ₹{sender_bal:.2f}")
+        bot.reply_to(message, f"❌ Insufficient balance (₹{sender_bal:.2f}).")
         return
 
     get_or_create_user(target_id)
@@ -238,13 +242,13 @@ def handle_tip(message: Message):
         message,
         f"💸 <b>Tip Sent!</b>\n\n"
         f"👤 <b>From:</b> {message.from_user.first_name}\n"
-        f"🎯 <b>To User:</b> <code>{target_id}</code>\n"
+        f"🎯 <b>To:</b> <code>{target_id}</code>\n"
         f"💰 <b>Amount:</b> ₹{amount:.2f}",
         parse_mode="HTML"
     )
 
 
-# Rakeback Command (/rakeback) - Works in both Group & DM
+# /rakeback Command
 @bot.message_handler(commands=["rakeback"])
 def handle_rakeback(message: Message):
     user_id = message.from_user.id
@@ -263,8 +267,7 @@ def handle_rakeback(message: Message):
         f"🎁 <b>Rakeback Rewards</b>\n\n"
         f"👤 <b>Player:</b> {message.from_user.first_name}\n"
         f"📊 <b>Total Wagered:</b> ₹{total_wagered:.2f}\n"
-        f"💵 <b>Claimable Rakeback (1%):</b> ₹{rakeback_amt:.2f}\n\n"
-        f"<i>Rakeback is auto-accrued from total game participation.</i>"
+        f"💵 <b>Claimable Rakeback (1%):</b> ₹{rakeback_amt:.2f}"
     )
 
     bot.reply_to(message, text, parse_mode="HTML")
@@ -279,13 +282,13 @@ def handle_setwager(message: Message):
 
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, f"⚠️ Usage: <code>/setwager &lt;multiplier&gt;</code> (Current: {WAGER_MULTIPLIER}x)", parse_mode="HTML")
+        bot.reply_to(message, f"⚠️ Usage: <code>/setwager &lt;multiplier&gt;</code>", parse_mode="HTML")
         return
 
     try:
         val = float(args[1].replace("x", ""))
         WAGER_MULTIPLIER = val
-        bot.reply_to(message, f"✅ <b>Wager multiplier set to {WAGER_MULTIPLIER}x!</b>", parse_mode="HTML")
+        bot.reply_to(message, f"✅ Wager multiplier set to {WAGER_MULTIPLIER}x!", parse_mode="HTML")
     except ValueError:
         bot.reply_to(message, "❌ Invalid number.")
 
