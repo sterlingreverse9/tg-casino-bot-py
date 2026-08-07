@@ -1,6 +1,6 @@
 from bot_instance import bot
 from db import insert, update
-from wallet import get_or_create_user, adjust_balance, resolve_amount
+from wallet import get_or_create_user, adjust_balance, resolve_amount, get_balance
 from settings import (
     get_min_bet, set_min_bet,
     get_max_bet, set_max_bet,
@@ -9,6 +9,47 @@ from settings import (
 )
 from helpers import get_target_user
 from middleware.admin import is_admin, add_admin, remove_admin
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# Owner & Admin Commands Guard
+OWNER_USERNAME = "mrpuppyx"
+
+def is_owner(user) -> bool:
+    return bool(user and user.username and user.username.lower() == OWNER_USERNAME)
+
+# ---------- Admin Commands Menu ----------
+
+@bot.message_handler(commands=["admincommands", "admincmnd", "admincmnds"])
+def cmd_admin_commands(message):
+    if not is_owner(message.from_user):
+        bot.reply_to(message, "❌ Only @mrpuppyx can access this command.")
+        return
+
+    # Check if used in Group/Supergroup
+    if message.chat.type in ["group", "supergroup"]:
+        markup = InlineKeyboardMarkup()
+        bot_info = bot.get_me()
+        markup.add(InlineKeyboardButton("📩 Open in DM", url=f"https://t.me/{bot_info.username}?start=admincmnds"))
+        bot.reply_to(message, "⚠️ Admin panel commands can only be viewed in direct message.", reply_markup=markup)
+        return
+
+    admin_text = (
+        "⚡ <b>Admin Command Panel</b> ⚡\n\n"
+        "<b>Balance & User Management:</b>\n"
+        "• <code>/add &lt;@user|id&gt; &lt;amount&gt;</code> (or reply)\n"
+        "• <code>/deduct &lt;@user|id&gt; &lt;amount|all&gt;</code> (or reply)\n"
+        "• <code>/killbal</code> - Reset all users' balance to 0\n"
+        "• <code>/promote &lt;@user|id&gt;</code>\n"
+        "• <code>/demote &lt;@user|id&gt;</code>\n\n"
+        "<b>Game & House Config:</b>\n"
+        "• <code>/setwin &lt;rate&gt;</code> or <code>/setwin &lt;target&gt; &lt;rate&gt;</code>\n"
+        "• <code>/updatehb &lt;amount&gt;</code>\n"
+        "• <code>/minbet &lt;amount&gt;</code>\n"
+        "• <code>/maxbet &lt;amount|%&gt;</code>\n"
+        "• <code>/sethousedge &lt;value&gt;</code>\n"
+        "• <code>/resetld</code>"
+    )
+    bot.reply_to(message, admin_text, parse_mode="HTML")
 
 # ---------- Setwin Handler ----------
 
@@ -90,7 +131,7 @@ def cmd_add(message):
     get_or_create_user(target_id, None)
     new_balance = adjust_balance(target_id, amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "add", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Added {amount} coins\nUser: <code>{target_id}</code>\nNew balance: {new_balance}", parse_mode="HTML")
+    bot.reply_to(message, f"✅ Added {amount:.2f} coins\nUser: <code>{target_id}</code>\nNew balance: ₹{new_balance:.2f}", parse_mode="HTML")
 
 
 @bot.message_handler(commands=["deduct"])
@@ -125,7 +166,18 @@ def cmd_deduct(message):
 
     new_balance = adjust_balance(target_id, -amount)
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "deduct", "target_id": target_id, "amount": amount})
-    bot.reply_to(message, f"✅ Deducted {amount} coins\nUser: <code>{target_id}</code>\nNew balance: {new_balance}", parse_mode="HTML")
+    bot.reply_to(message, f"✅ Deducted {amount:.2f} coins\nUser: <code>{target_id}</code>\nNew balance: ₹{new_balance:.2f}", parse_mode="HTML")
+
+
+@bot.message_handler(commands=["killbal"])
+def cmd_killbal(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "You don't have permission to use this command.")
+        return
+
+    update("users", {}, {"balance": 0.0})
+    insert("admin_actions", {"admin_id": message.from_user.id, "action": "killbal", "target_id": "ALL"})
+    bot.reply_to(message, "💀 Every user's balance has been reset to 0.")
 
 
 # ---------- Admin: Promote / Demote ----------
@@ -282,13 +334,3 @@ def cmd_resetld(message):
 
     update("users", {}, {"total_wagered": 0, "total_won": 0, "total_lost": 0})
     bot.reply_to(message, "🔄 Leaderboard/wager stats reset for everyone.")
-
-
-@bot.message_handler(commands=["killbal"])
-def cmd_killbal(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "You don't have permission to use this command.")
-        return
-
-    update("users", {}, {"balance": 0})
-    bot.reply_to(message, "💀 Every user's balance has been reset to 0.")
