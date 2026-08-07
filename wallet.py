@@ -1,6 +1,7 @@
 import sqlite3
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from bot_instance import bot
+from helpers import get_target_user
 
 # Default Wager Multiplier
 WAGER_MULTIPLIER = 1.0
@@ -98,7 +99,6 @@ def add_wager_requirement(telegram_id: int, amount: float):
     conn.close()
 
 def reduce_wager_requirement(telegram_id: int, bet_amount: float):
-    """Deducts bet_amount from wager_required."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -156,13 +156,119 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
     conn.commit()
     conn.close()
 
-    # ONLY REDUCE WAGER IF THE USER LOST THE BET
     res_upper = str(result).upper()
     if res_upper in ["LOSE", "LOSS"] or payout == 0:
         reduce_wager_requirement(telegram_id, bet_amount)
 
-def setup_secret_wallet_handlers(bot=None):
-    pass
+
+# ---------- COMMAND HANDLERS ----------
+
+# Wallet Commands (/wallet, /bal, /balance)
+@bot.message_handler(commands=["wallet", "bal", "balance"])
+def handle_wallet(message: Message):
+    user = message.from_user
+    get_or_create_user(user.id, user.username, user.first_name)
+    
+    bal = get_balance(user.id)
+    wager = get_wager_remaining(user.id)
+
+    text = (
+        f"💳 <b>Wallet Balance</b>\n\n"
+        f"👤 <b>User:</b> {user.first_name}\n"
+        f"💰 <b>Balance:</b> ₹{bal:.2f}\n"
+        f"🎯 <b>Wager Needed:</b> ₹{wager:.2f}"
+    )
+
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("💳 Deposit", callback_data="deposit"),
+        InlineKeyboardButton("🏧 Withdraw", callback_data="withdraw")
+    )
+
+    bot.reply_to(message, text, parse_mode="HTML", reply_markup=markup)
+
+
+# Tip Command (/tip)
+@bot.message_handler(commands=["tip"])
+def handle_tip(message: Message):
+    sender_id = message.from_user.id
+    get_or_create_user(sender_id, message.from_user.username, message.from_user.first_name)
+
+    parts = message.text.split()
+    target_id = None
+    amount_str = None
+
+    if message.reply_to_message:
+        if len(parts) < 2:
+            bot.reply_to(message, "⚠️ Usage: Reply to a user with <code>/tip <amount|all></code>", parse_mode="HTML")
+            return
+        target_id = message.reply_to_message.from_user.id
+        amount_str = parts[1]
+    else:
+        if len(parts) < 3:
+            bot.reply_to(message, "⚠️ Usage: <code>/tip <@user|id> <amount|all></code> or reply to user.", parse_mode="HTML")
+            return
+        target_id = get_target_user(message, parts[1])
+        amount_str = parts[2]
+
+    if not target_id:
+        bot.reply_to(message, "❌ Target user not found.")
+        return
+
+    if target_id == sender_id:
+        bot.reply_to(message, "❌ You cannot tip yourself.")
+        return
+
+    amount = resolve_amount(sender_id, amount_str)
+    if amount is None or amount <= 0:
+        bot.reply_to(message, "❌ Invalid tip amount or insufficient funds.")
+        return
+
+    sender_bal = get_balance(sender_id)
+    if sender_bal < amount:
+        bot.reply_to(message, f"❌ Insufficient balance. Your balance: ₹{sender_bal:.2f}")
+        return
+
+    get_or_create_user(target_id)
+    adjust_balance(sender_id, -amount)
+    adjust_balance(target_id, amount)
+
+    bot.reply_to(
+        message,
+        f"💸 <b>Tip Sent!</b>\n\n"
+        f"👤 <b>From:</b> {message.from_user.first_name}\n"
+        f"🎯 <b>To User:</b> <code>{target_id}</code>\n"
+        f"💰 <b>Amount:</b> ₹{amount:.2f}",
+        parse_mode="HTML"
+    )
+
+
+# Rakeback Command (/rakeback) - Works in both Group & DM
+@bot.message_handler(commands=["rakeback"])
+def handle_rakeback(message: Message):
+    user_id = message.from_user.id
+    get_or_create_user(user_id, message.from_user.username, message.from_user.first_name)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT SUM(bet_amount) as total_bets FROM bets WHERE telegram_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    total_wagered = float(row["total_bets"]) if row and row["total_bets"] else 0.0
+    # 1% Rakeback calculation
+    rakeback_amt = round(total_wagered * 0.01, 2)
+
+    text = (
+        f"🎁 <b>Rakeback Rewards</b>\n\n"
+        f"👤 <b>Player:</b> {message.from_user.first_name}\n"
+        f"📊 <b>Total Wagered:</b> ₹{total_wagered:.2f}\n"
+        f"💵 <b>Claimable Rakeback (1%):</b> ₹{rakeback_amt:.2f}\n\n"
+        f"<i>Rakeback is auto-accrued from total game participation.</i>"
+    )
+
+    bot.reply_to(message, text, parse_mode="HTML")
+
 
 @bot.message_handler(commands=["setwager"])
 def handle_setwager(message: Message):
@@ -182,3 +288,6 @@ def handle_setwager(message: Message):
         bot.reply_to(message, f"✅ <b>Wager multiplier set to {WAGER_MULTIPLIER}x!</b>", parse_mode="HTML")
     except ValueError:
         bot.reply_to(message, "❌ Invalid number.")
+
+def setup_secret_wallet_handlers(bot=None):
+    pass
