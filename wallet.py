@@ -1,8 +1,7 @@
 import sqlite3
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from bot_instance import bot
 
-# Banner Image URL
 CARD_IMAGE_URL = "https://i.ibb.co/L9vXGzq/casino-wallet-banner.jpg"
 WAGER_MULTIPLIER = 1.0
 
@@ -23,6 +22,7 @@ def init_db():
             first_name TEXT,
             balance REAL DEFAULT 100.0,
             wager_required REAL DEFAULT 0.0,
+            rakeback_claimed REAL DEFAULT 0.0,
             is_bot INTEGER DEFAULT 0,
             is_admin INTEGER DEFAULT 0
         )
@@ -101,7 +101,6 @@ def get_wager_remaining(telegram_id: int) -> float:
         return 0.0
 
 def get_house_balance() -> float:
-    """Returns total house bankroll balance."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -176,6 +175,7 @@ def handle_wallet(message: Message):
 
     bal = get_balance(user.id)
     wager = get_wager_remaining(user.id)
+    bot_info = bot.get_me()
 
     text = (
         f"💳 <b>Wallet Balance</b>\n\n"
@@ -186,8 +186,8 @@ def handle_wallet(message: Message):
 
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton("💳 Deposit", callback_data="deposit"),
-        InlineKeyboardButton("🏧 Withdraw", callback_data="withdraw")
+        InlineKeyboardButton("💳 Deposit", url=f"https://t.me/{bot_info.username}?start=deposit"),
+        InlineKeyboardButton("🏧 Withdraw", url=f"https://t.me/{bot_info.username}?start=withdraw")
     )
 
     try:
@@ -196,32 +196,48 @@ def handle_wallet(message: Message):
         bot.reply_to(message, text, parse_mode="HTML", reply_markup=markup)
 
 
-@bot.callback_query_handler(func=lambda call: call.data in ["deposit", "withdraw"])
-def handle_wallet_callbacks(call: CallbackQuery):
-    bot.answer_callback_query(call.id)
-    user_id = call.from_user.id
+@bot.message_handler(commands=["rakeback"])
+def handle_rakeback(message: Message):
+    user_id = message.from_user.id
+    get_or_create_user(user_id, message.from_user.username, message.from_user.first_name)
 
-    if call.data == "deposit":
-        msg = (
-            "💳 <b>Deposit Funds</b>\n\n"
-            "To deposit funds into your casino wallet, contact the cashier or admin directly:\n"
-            "👨‍💻 <b>Admin Support:</b> @mrpuppyx"
-        )
-        bot.send_message(call.message.chat.id, msg, parse_mode="HTML")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT SUM(bet_amount) as total_bets FROM bets WHERE telegram_id = ?", (user_id,))
+    row = cursor.fetchone()
+    
+    cursor.execute("SELECT COALESCE(rakeback_claimed, 0) as claimed FROM users WHERE telegram_id = ?", (user_id,))
+    user_row = cursor.fetchone()
 
-    elif call.data == "withdraw":
-        bal = get_balance(user_id)
-        wager = get_wager_remaining(user_id)
+    total_wagered = float(row["total_bets"]) if row and row["total_bets"] else 0.0
+    claimed = float(user_row["claimed"]) if user_row and user_row["claimed"] else 0.0
 
-        if wager > 0:
-            msg = f"⚠️ <b>Withdrawal Locked!</b>\nYou still have ₹{wager:.2f} remaining wager requirement to complete before withdrawing."
-        else:
-            msg = (
-                f"🏧 <b>Withdraw Request</b>\n\n"
-                f"Available Balance: ₹{bal:.2f}\n"
-                "Please message @mrpuppyx to process your payout."
-            )
-        bot.send_message(call.message.chat.id, msg, parse_mode="HTML")
+    total_rakeback = round(total_wagered * 0.01, 2)
+    claimable = round(total_rakeback - claimed, 2)
+
+    if claimable <= 0:
+        bot.reply_to(message, "🎁 <b>Rakeback Status</b>\n\nNo claimable rakeback available right now. Keep playing to earn more!", parse_mode="HTML")
+        conn.close()
+        return
+
+    # Add claimable rakeback to user balance
+    adjust_balance(user_id, claimable)
+    
+    # Update total claimed rakeback
+    cursor.execute("UPDATE users SET rakeback_claimed = COALESCE(rakeback_claimed, 0) + ? WHERE telegram_id = ?", (claimable, user_id))
+    conn.commit()
+    conn.close()
+
+    new_bal = get_balance(user_id)
+    text = (
+        f"🎁 <b>Rakeback Claimed!</b>\n\n"
+        f"👤 <b>Player:</b> {message.from_user.first_name}\n"
+        f"📊 <b>Total Wagered:</b> ₹{total_wagered:.2f}\n"
+        f"💵 <b>Claimed (1%):</b> ₹{claimable:.2f}\n"
+        f"💰 <b>New Balance:</b> ₹{new_bal:.2f}"
+    )
+
+    bot.reply_to(message, text, parse_mode="HTML")
 
 
 @bot.message_handler(commands=["tip"])
@@ -274,30 +290,6 @@ def handle_tip(message: Message):
         f"💰 <b>Amount:</b> ₹{amount:.2f}",
         parse_mode="HTML"
     )
-
-
-@bot.message_handler(commands=["rakeback"])
-def handle_rakeback(message: Message):
-    user_id = message.from_user.id
-    get_or_create_user(user_id, message.from_user.username, message.from_user.first_name)
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT SUM(bet_amount) as total_bets FROM bets WHERE telegram_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-
-    total_wagered = float(row["total_bets"]) if row and row["total_bets"] else 0.0
-    rakeback_amt = round(total_wagered * 0.01, 2)
-
-    text = (
-        f"🎁 <b>Rakeback Rewards</b>\n\n"
-        f"👤 <b>Player:</b> {message.from_user.first_name}\n"
-        f"📊 <b>Total Wagered:</b> ₹{total_wagered:.2f}\n"
-        f"💵 <b>Claimable Rakeback (1%):</b> ₹{rakeback_amt:.2f}"
-    )
-
-    bot.reply_to(message, text, parse_mode="HTML")
 
 
 @bot.message_handler(commands=["setwager"])
