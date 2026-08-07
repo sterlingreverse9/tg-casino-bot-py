@@ -20,7 +20,7 @@ active_rps_games = {}
 def fetch_configured_win_rate(user_id: int) -> float | None:
     rate = None
 
-    # 1. Check admin / admin_handlers module
+    # 1. Check admin modules
     for mod_name in ["admin", "admin_handlers"]:
         try:
             mod = __import__(mod_name)
@@ -53,7 +53,7 @@ def fetch_configured_win_rate(user_id: int) -> float | None:
         except Exception as e:
             print(f"[RPS DEBUG ERROR] Helpers check failed: {e}", file=sys.stderr)
 
-    # 3. Check SQLite Database (Auto-patches 'win_rate' column if missing)
+    # 3. Check SQLite Database (Auto-patches 'win_rate' column)
     if rate is None:
         try:
             import sqlite3
@@ -343,26 +343,31 @@ def resolve_rps_game(chat_id: int, message_id: int):
             adjust_balance(winner_id, payout)
             record_bet(winner_id, "rps", bet, payout, "WIN")
 
-            # Try triggering win updates broadcast across modules
+            # Execute send_win_update dynamically inside helpers.py
             try:
                 import helpers
                 found_func = False
-                for func_name in ["send_win_update", "post_win", "broadcast_win"]:
-                    if hasattr(helpers, func_name):
-                        getattr(helpers, func_name)(
-                            user_id=winner_id,
-                            user_name=winner_name,
-                            game_name="RPS ✊✌️✋",
-                            bet=bet,
-                            payout=payout,
-                            multiplier=RPS_DEFAULT_MULTIPLIER
-                        )
-                        print(f"[RPS DEBUG] Called helpers.{func_name}() successfully!", file=sys.stderr)
-                        found_func = True
-                        break
+                for attr_name in dir(helpers):
+                    if any(key in attr_name.lower() for key in ["win", "broadcast", "channel", "post", "notify"]):
+                        attr = getattr(helpers, attr_name)
+                        if callable(attr):
+                            try:
+                                attr(
+                                    user_id=winner_id,
+                                    user_name=winner_name,
+                                    game_name="RPS ✊✌️✋",
+                                    bet=bet,
+                                    payout=payout,
+                                    multiplier=RPS_DEFAULT_MULTIPLIER
+                                )
+                                print(f"[RPS DEBUG] Called helpers.{attr_name}() successfully!", file=sys.stderr)
+                                found_func = True
+                                break
+                            except Exception:
+                                pass
 
                 if not found_func:
-                    print("[RPS DEBUG ERROR] No win update function found in helpers.py", file=sys.stderr)
+                    print(f"[RPS DEBUG ERROR] No working win update function in helpers.py (Available attributes: {dir(helpers)})", file=sys.stderr)
             except Exception as e:
                 print(f"[RPS DEBUG ERROR] Win broadcast failed: {e}", file=sys.stderr)
 
