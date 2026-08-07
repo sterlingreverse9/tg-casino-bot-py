@@ -14,6 +14,8 @@ def name_of(user):
     return format_display_name(user.first_name, user.username)
 
 
+# --- GAMES MENU HANDLER ---
+
 @bot.message_handler(commands=["game", "games"])
 def send_games_list(message):
     games_text = (
@@ -43,6 +45,8 @@ def send_games_list(message):
     bot.reply_to(message, games_text, parse_mode="HTML")
 
 
+# --- COINFLIP HANDLER ---
+
 @bot.message_handler(commands=["cf"])
 def cmd_cf(message):
     ensure_user(message)
@@ -62,6 +66,8 @@ def cmd_cf(message):
         return
     play_coinflip(bot, message, message.from_user.id, bet_amount, parts[2].lower())
 
+
+# --- LIMBO HANDLER ---
 
 @bot.message_handler(commands=["limbo"])
 def cmd_limbo(message):
@@ -86,6 +92,8 @@ def cmd_limbo(message):
         return
     play_limbo(bot, message.chat.id, message.from_user.id, bet_amount, target_multiplier, name_of(message.from_user))
 
+
+# --- DICE ROLL HANDLERS ---
 
 def build_dr_keyboard(telegram_id: int, amount_str: str):
     markup = InlineKeyboardMarkup()
@@ -158,6 +166,8 @@ def handle_dr_callback(call):
     play_dice_roll(bot, call.message.chat.id, owner_id, bet_amount, choice, name_of(call.from_user))
 
 
+# --- PREDICT NUMBER HANDLER ---
+
 @bot.message_handler(commands=["pn", "predictno", "predictnumber"])
 def cmd_predict_number(message):
     ensure_user(message)
@@ -183,13 +193,15 @@ def cmd_predict_number(message):
     play_predict_number(bot, message.chat.id, message.from_user.id, bet_amount, guess, name_of(message.from_user))
 
 
+# --- ANIMATED TELEGRAM EMOJI GAMES (Basketball, Darts, Slots, Football, Bowling) ---
+
 @bot.message_handler(commands=["basket", "basketball", "darts", "dart", "slots", "slot", "football", "bowl", "bowling"])
 def cmd_animated_games(message):
     ensure_user(message)
     if is_user_frozen(message.from_user.id):
         bot.reply_to(message, "❄️ Your account is currently frozen.")
         return
-    
+
     raw_cmd = message.text.split()[0].lower()
     cmd = raw_cmd.replace("/", "").split("@")[0]
     parts = message.text.split()
