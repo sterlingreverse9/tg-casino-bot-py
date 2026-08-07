@@ -2,7 +2,7 @@ import sqlite3
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from bot_instance import bot
 
-# Banner Image URL (Replace with your custom hosted banner URL if needed)
+# Banner Image URL
 CARD_IMAGE_URL = "https://i.ibb.co/L9vXGzq/casino-wallet-banner.jpg"
 WAGER_MULTIPLIER = 1.0
 
@@ -39,6 +39,13 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS house (
+            id INTEGER PRIMARY KEY,
+            balance REAL DEFAULT 100000.0
+        )
+    """)
+    cursor.execute("INSERT OR IGNORE INTO house (id, balance) VALUES (1, 100000.0)")
     conn.commit()
     conn.close()
 
@@ -93,6 +100,19 @@ def get_wager_remaining(telegram_id: int) -> float:
         conn.close()
         return 0.0
 
+def get_house_balance() -> float:
+    """Returns total house bankroll balance."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT balance FROM house WHERE id = 1")
+        row = cursor.fetchone()
+        conn.close()
+        return float(row["balance"]) if row and row["balance"] is not None else 100000.0
+    except Exception:
+        conn.close()
+        return 100000.0
+
 def resolve_amount(user_id: int, amount_str: str) -> float | None:
     amount_str = str(amount_str).lower().strip()
     user_bal = get_balance(user_id)
@@ -136,7 +156,6 @@ def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, re
 
 # ---------- HANDLERS & CALLBACKS ----------
 
-# /wallet, /bal, /balance with Image Card
 @bot.message_handler(commands=["wallet", "bal", "balance"])
 def handle_wallet(message: Message):
     user = message.from_user
@@ -159,14 +178,11 @@ def handle_wallet(message: Message):
     )
 
     try:
-        # Tries sending card photo first
         bot.send_photo(message.chat.id, photo=CARD_IMAGE_URL, caption=text, parse_mode="HTML", reply_markup=markup)
     except Exception:
-        # Fallback to text if photo fails
         bot.reply_to(message, text, parse_mode="HTML", reply_markup=markup)
 
 
-# Inline Button Handlers for Deposit & Withdraw
 @bot.callback_query_handler(func=lambda call: call.data in ["deposit", "withdraw"])
 def handle_wallet_callbacks(call: CallbackQuery):
     bot.answer_callback_query(call.id)
@@ -195,7 +211,6 @@ def handle_wallet_callbacks(call: CallbackQuery):
         bot.send_message(call.message.chat.id, msg, parse_mode="HTML")
 
 
-# /tip Command
 @bot.message_handler(commands=["tip"])
 def handle_tip(message: Message):
     from helpers import get_target_user
@@ -248,7 +263,6 @@ def handle_tip(message: Message):
     )
 
 
-# /rakeback Command
 @bot.message_handler(commands=["rakeback"])
 def handle_rakeback(message: Message):
     user_id = message.from_user.id
