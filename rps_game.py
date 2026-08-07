@@ -1,5 +1,7 @@
 import random
 import time
+import sys
+import traceback
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 
 from bot_instance import bot
@@ -23,10 +25,15 @@ def fetch_configured_win_rate(user_id: int) -> float | None:
         import admin
         if hasattr(admin, "get_user_win_rate"):
             rate = admin.get_user_win_rate(user_id)
+            print(f"[RPS DEBUG] admin.get_user_win_rate({user_id}) returned: {rate}", file=sys.stderr)
         elif hasattr(admin, "WIN_RATES") and user_id in admin.WIN_RATES:
             rate = admin.WIN_RATES[user_id]
-    except Exception:
-        pass
+            print(f"[RPS DEBUG] admin.WIN_RATES[{user_id}] returned: {rate}", file=sys.stderr)
+        elif hasattr(admin, "WIN_RATES") and "all" in admin.WIN_RATES:
+            rate = admin.WIN_RATES["all"]
+            print(f"[RPS DEBUG] admin.WIN_RATES['all'] returned: {rate}", file=sys.stderr)
+    except Exception as e:
+        print(f"[RPS DEBUG ERROR] Admin check failed: {e}", file=sys.stderr)
 
     # Check helpers module
     if rate is None:
@@ -34,10 +41,15 @@ def fetch_configured_win_rate(user_id: int) -> float | None:
             import helpers
             if hasattr(helpers, "get_user_win_rate"):
                 rate = helpers.get_user_win_rate(user_id)
+                print(f"[RPS DEBUG] helpers.get_user_win_rate({user_id}) returned: {rate}", file=sys.stderr)
             elif hasattr(helpers, "WIN_RATES") and user_id in helpers.WIN_RATES:
                 rate = helpers.WIN_RATES[user_id]
-        except Exception:
-            pass
+                print(f"[RPS DEBUG] helpers.WIN_RATES[{user_id}] returned: {rate}", file=sys.stderr)
+            elif hasattr(helpers, "WIN_RATES") and "all" in helpers.WIN_RATES:
+                rate = helpers.WIN_RATES["all"]
+                print(f"[RPS DEBUG] helpers.WIN_RATES['all'] returned: {rate}", file=sys.stderr)
+        except Exception as e:
+            print(f"[RPS DEBUG ERROR] Helpers check failed: {e}", file=sys.stderr)
 
     # Check SQLite Database
     if rate is None:
@@ -51,18 +63,23 @@ def fetch_configured_win_rate(user_id: int) -> float | None:
             conn.close()
             if row and row["win_rate"] is not None:
                 rate = row["win_rate"]
-        except Exception:
-            pass
+                print(f"[RPS DEBUG] DB win_rate for {user_id} returned: {rate}", file=sys.stderr)
+        except Exception as e:
+            print(f"[RPS DEBUG ERROR] DB check failed: {e}", file=sys.stderr)
 
     if rate is None:
+        print(f"[RPS DEBUG] No setwin found for user {user_id}. Defaulting to random.", file=sys.stderr)
         return None
 
-    rate = float(rate)
-    # Convert percentage (e.g., 100 or 50) to decimal scale (1.0 or 0.5) if needed
-    if rate > 1.0:
-        rate = rate / 100.0
-
-    return rate
+    try:
+        rate = float(rate)
+        if rate > 1.0:
+            rate = rate / 100.0
+        print(f"[RPS DEBUG] Final normalized win rate: {rate}", file=sys.stderr)
+        return rate
+    except ValueError as e:
+        print(f"[RPS DEBUG ERROR] Rate conversion failed for {rate}: {e}", file=sys.stderr)
+        return None
 
 
 @bot.message_handler(commands=["rps"])
@@ -148,7 +165,6 @@ def callback_play_bot(call: CallbackQuery):
         bot.answer_callback_query(call.id, "❌ Insufficient balance to start!", show_alert=True)
         return
 
-    # Deduct bet balance
     adjust_balance(host_id, -bet_amount)
 
     msg_id = call.message.message_id
@@ -157,7 +173,7 @@ def callback_play_bot(call: CallbackQuery):
     active_rps_games[msg_id] = {
         "host_id": host_id,
         "host_name": call.from_user.first_name,
-        "opponent_id": 0,  # 0 indicates Bot
+        "opponent_id": 0,
         "opponent_name": f"🤖 {bot_name}",
         "is_bot": True,
         "bet": bet_amount,
@@ -190,7 +206,6 @@ def callback_accept_pvp(call: CallbackQuery):
         bot.answer_callback_query(call.id, "❌ Host no longer has enough balance!", show_alert=True)
         return
 
-    # Deduct bet from both users
     adjust_balance(host_id, -bet_amount)
     adjust_balance(opponent.id, -bet_amount)
 
@@ -265,15 +280,19 @@ def callback_make_move(call: CallbackQuery):
         if win_rate is not None:
             if win_rate <= 0.0:
                 game["opponent_choice"] = COUNTER_WIN[move]
+                print(f"[RPS DEBUG] FORCED LOSS: User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
             elif win_rate >= 1.0:
                 game["opponent_choice"] = COUNTER_LOSE[move]
+                print(f"[RPS DEBUG] FORCED WIN: User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
             else:
                 if random.random() < win_rate:
                     game["opponent_choice"] = COUNTER_LOSE[move]
                 else:
                     game["opponent_choice"] = COUNTER_WIN[move]
+                print(f"[RPS DEBUG] PROBABILITY RESULT ({win_rate}): Bot picked {game['opponent_choice']}", file=sys.stderr)
         else:
             game["opponent_choice"] = random.choice(["rock", "scissors", "paper"])
+            print(f"[RPS DEBUG] RANDOM CHOICE: Bot picked {game['opponent_choice']}", file=sys.stderr)
 
     if game["host_choice"] and game["opponent_choice"]:
         resolve_rps_game(call.message.chat.id, message_id)
@@ -313,20 +332,29 @@ def resolve_rps_game(chat_id: int, message_id: int):
             adjust_balance(winner_id, payout)
             record_bet(winner_id, "rps", bet, payout, "WIN")
 
-            # Safely trigger win update inside function to prevent circular import crash
+            # Debug win updates channel sending
             try:
                 import helpers
-                if hasattr(helpers, "send_win_update"):
-                    helpers.send_win_update(
-                        user_id=winner_id,
-                        user_name=winner_name,
-                        game_name="RPS ✊✌️✋",
-                        bet=bet,
-                        payout=payout,
-                        multiplier=RPS_DEFAULT_MULTIPLIER
-                    )
-            except Exception:
-                pass
+                found_func = False
+                for func_name in ["send_win_update", "post_win", "broadcast_win"]:
+                    if hasattr(helpers, func_name):
+                        getattr(helpers, func_name)(
+                            user_id=winner_id,
+                            user_name=winner_name,
+                            game_name="RPS ✊✌️✋",
+                            bet=bet,
+                            payout=payout,
+                            multiplier=RPS_DEFAULT_MULTIPLIER
+                        )
+                        print(f"[RPS DEBUG] Called helpers.{func_name}() successfully!", file=sys.stderr)
+                        found_func = True
+                        break
+
+                if not found_func:
+                    print("[RPS DEBUG ERROR] Could not find win broadcast function in helpers.py!", file=sys.stderr)
+            except Exception as e:
+                print(f"[RPS DEBUG ERROR] Exception while broadcasting win: {e}", file=sys.stderr)
+                traceback.print_exc()
 
         if loser_id != 0:
             record_bet(loser_id, "rps", bet, 0.0, "LOSE")
