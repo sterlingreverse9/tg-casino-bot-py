@@ -1,4 +1,5 @@
 import asyncio
+import rps_game
 
 # Python 3.14 Pyrogram compatibility patch
 _orig_get_event_loop = asyncio.get_event_loop
