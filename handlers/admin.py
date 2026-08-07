@@ -1,6 +1,7 @@
+import sqlite3
 from bot_instance import bot
 from db import insert, update
-from wallet import get_or_create_user, adjust_balance, resolve_amount
+from wallet import get_or_create_user, adjust_balance, resolve_amount, get_db_connection
 from settings import (
     get_min_bet, set_min_bet,
     get_max_bet, set_max_bet,
@@ -11,18 +12,14 @@ from helpers import get_target_user
 from middleware.admin import is_admin, add_admin, remove_admin
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Check if user is Admin or Owner
 def check_permission(user) -> bool:
     if is_admin(user.id):
         return True
     if user.username and user.username.lower() == "mrpuppyx":
-        # Auto-promote owner in database
         add_admin(user.id)
         update("users", {"telegram_id": user.id}, {"is_admin": True})
         return True
     return False
-
-# ---------- Admin Commands Menu ----------
 
 @bot.message_handler(commands=["admincommands", "admincmnd", "admincmnds"])
 def cmd_admin_commands(message):
@@ -30,7 +27,6 @@ def cmd_admin_commands(message):
         bot.reply_to(message, "❌ You don't have permission to view admin commands.")
         return
 
-    # If used in Group/Supergroup, direct to DM
     if message.chat.type in ["group", "supergroup"]:
         markup = InlineKeyboardMarkup()
         bot_info = bot.get_me()
@@ -52,7 +48,7 @@ def cmd_admin_commands(message):
         "• <code>/setwager &lt;multiplier&gt;</code> - Set wager requirement multiplier\n"
         "• <code>/minbet &lt;amount&gt;</code> - Set minimum bet limit\n"
         "• <code>/maxbet &lt;amount|%&gt;</code> - Set maximum bet limit\n"
-        "• <code>/sethousedge &lt;value&gt;</code> - Set house edge (e.g. 0.10)\n"
+        "• <code>/sethousedge &lt;value&gt;</code> - Set house edge\n"
         "• <code>/updatehb &lt;amount&gt;</code> - Set house bankroll\n"
         "• <code>/resetld</code> - Reset leaderboards"
     )
@@ -65,9 +61,14 @@ def cmd_killbal(message):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
 
-    update("users", {}, {"balance": 0.0})
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET balance = 0.0")
+    conn.commit()
+    conn.close()
+
     insert("admin_actions", {"admin_id": message.from_user.id, "action": "killbal", "target_id": "ALL"})
-    bot.reply_to(message, "💀 Every user's balance has been reset to 0.")
+    bot.reply_to(message, "💀 Every user's balance has been reset to ₹0.00!")
 
 
 @bot.message_handler(commands=["add"])
