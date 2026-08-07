@@ -55,11 +55,17 @@ def init_db():
     """)
     cursor.execute("INSERT OR IGNORE INTO house (id, balance) VALUES (1, 100000.0)")
     
-    # Ensure missing columns exist in case table was created earlier
-    try:
-        cursor.execute("ALTER TABLE users ADD COLUMN last_rakeback_claim REAL DEFAULT 0.0")
-    except sqlite3.OperationalError:
-        pass
+    # Auto-migrate existing database to ensure missing columns exist
+    columns_to_add = [
+        ("rakeback_claimed", "REAL DEFAULT 0.0"),
+        ("last_rakeback_claim", "REAL DEFAULT 0.0"),
+        ("wager_required", "REAL DEFAULT 0.0")
+    ]
+    for col_name, col_type in columns_to_add:
+        try:
+            cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
     conn.commit()
     conn.close()
