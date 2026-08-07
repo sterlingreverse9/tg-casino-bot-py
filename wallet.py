@@ -1,9 +1,16 @@
+import time
 import sqlite3
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from bot_instance import bot
 
 CARD_IMAGE_URL = "https://i.ibb.co/L9vXGzq/casino-wallet-banner.jpg"
 WAGER_MULTIPLIER = 1.0
+
+# Set your required channel links and usernames here
+WINS_CHANNEL_URL = "https://t.me/your_wins_channel"
+UPDATES_CHANNEL_URL = "https://t.me/your_updates_channel"
+BOT_USERNAME_TAG = "@thecassinobot"
+
 
 # --- CORE DATABASE FUNCTIONS ---
 
@@ -23,6 +30,7 @@ def init_db():
             balance REAL DEFAULT 100.0,
             wager_required REAL DEFAULT 0.0,
             rakeback_claimed REAL DEFAULT 0.0,
+            last_rakeback_claim REAL DEFAULT 0.0,
             is_bot INTEGER DEFAULT 0,
             is_admin INTEGER DEFAULT 0
         )
@@ -46,6 +54,13 @@ def init_db():
         )
     """)
     cursor.execute("INSERT OR IGNORE INTO house (id, balance) VALUES (1, 100000.0)")
+    
+    # Ensure missing columns exist in case table was created earlier
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN last_rakeback_claim REAL DEFAULT 0.0")
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -196,48 +211,117 @@ def handle_wallet(message: Message):
         bot.reply_to(message, text, parse_mode="HTML", reply_markup=markup)
 
 
+def check_user_boost(user_id: int, user_obj) -> float:
+    """Calculates if user qualifies for 1% instead of standard 0.5%."""
+    full_name = f"{user_obj.first_name or ''} {user_obj.last_name or ''}"
+    if BOT_USERNAME_TAG.lower() in full_name.lower():
+        return 0.01
+    return 0.005
+
+
 @bot.message_handler(commands=["rakeback"])
 def handle_rakeback(message: Message):
-    user_id = message.from_user.id
-    get_or_create_user(user_id, message.from_user.username, message.from_user.first_name)
+    user = message.from_user
+    get_or_create_user(user.id, user.username, user.first_name)
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT SUM(bet_amount) as total_bets FROM bets WHERE telegram_id = ?", (user_id,))
+    
+    cursor.execute("SELECT SUM(bet_amount) as total_bets, SUM(payout) as total_payouts FROM bets WHERE telegram_id = ?", (user.id,))
     row = cursor.fetchone()
     
-    cursor.execute("SELECT COALESCE(rakeback_claimed, 0) as claimed FROM users WHERE telegram_id = ?", (user_id,))
+    cursor.execute("SELECT COALESCE(rakeback_claimed, 0) as claimed FROM users WHERE telegram_id = ?", (user.id,))
+    user_row = cursor.fetchone()
+    conn.close()
+
+    total_bets = float(row["total_bets"]) if row and row["total_bets"] else 0.0
+    total_payouts = float(row["total_payouts"]) if row and row["total_payouts"] else 0.0
+    total_losses = max(0.0, total_bets - total_payouts)
+
+    rate = check_user_boost(user.id, user)
+    total_rakeback_earned = total_losses * rate
+    already_claimed = float(user_row["claimed"]) if user_row and user_row["claimed"] else 0.0
+    
+    claimable = max(0.0, round(total_rakeback_earned - already_claimed, 2))
+
+    text = (
+        "💸 <b>Rakeback</b>\n\n"
+        "You get 0.5% of your losses back as rakeback, claimable every 12 hours.\n"
+        f"Add {BOT_USERNAME_TAG} to your Telegram name and join the channels below to bump that to 1%!\n\n"
+        f"💰 <b>Rakeback balance: ₹{claimable:.2f}</b>"
+    )
+
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("🏆 Join Wins Channel", url=WINS_CHANNEL_URL),
+        InlineKeyboardButton("📢 Join Updates Channel", url=UPDATES_CHANNEL_URL),
+        InlineKeyboardButton("💵 Claim Balance", callback_data=f"claim_rakeback:{user.id}")
+    )
+
+    bot.reply_to(message, text, parse_mode="HTML", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("claim_rakeback:"))
+def callback_claim_rakeback(call: CallbackQuery):
+    target_user_id = int(call.data.split(":")[1])
+    if call.from_user.id != target_user_id:
+        bot.answer_callback_query(call.id, "❌ This is not your rakeback menu!", show_alert=True)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COALESCE(last_rakeback_claim, 0) as last_claim, COALESCE(rakeback_claimed, 0) as claimed FROM users WHERE telegram_id = ?", (target_user_id,))
     user_row = cursor.fetchone()
 
-    total_wagered = float(row["total_bets"]) if row and row["total_bets"] else 0.0
-    claimed = float(user_row["claimed"]) if user_row and user_row["claimed"] else 0.0
+    now = time.time()
+    last_claim = user_row["last_claim"] if user_row else 0
+    cooldown = 12 * 3600  # 12 Hours
 
-    total_rakeback = round(total_wagered * 0.01, 2)
-    claimable = round(total_rakeback - claimed, 2)
-
-    if claimable <= 0:
-        bot.reply_to(message, "🎁 <b>Rakeback Status</b>\n\nNo claimable rakeback available right now. Keep playing to earn more!", parse_mode="HTML")
+    if now - last_claim < cooldown:
+        remaining_hrs = round((cooldown - (now - last_claim)) / 3600, 1)
+        bot.answer_callback_query(call.id, f"⏳ Rakeback can only be claimed every 12 hours. Try again in {remaining_hrs}h.", show_alert=True)
         conn.close()
         return
 
-    # Add claimable rakeback to user balance
-    adjust_balance(user_id, claimable)
-    
-    # Update total claimed rakeback
-    cursor.execute("UPDATE users SET rakeback_claimed = COALESCE(rakeback_claimed, 0) + ? WHERE telegram_id = ?", (claimable, user_id))
+    cursor.execute("SELECT SUM(bet_amount) as total_bets, SUM(payout) as total_payouts FROM bets WHERE telegram_id = ?", (target_user_id,))
+    row = cursor.fetchone()
+
+    total_bets = float(row["total_bets"]) if row and row["total_bets"] else 0.0
+    total_payouts = float(row["total_payouts"]) if row and row["total_payouts"] else 0.0
+    total_losses = max(0.0, total_bets - total_payouts)
+
+    rate = check_user_boost(target_user_id, call.from_user)
+    total_rakeback_earned = total_losses * rate
+    already_claimed = float(user_row["claimed"]) if user_row and user_row["claimed"] else 0.0
+    claimable = max(0.0, round(total_rakeback_earned - already_claimed, 2))
+
+    if claimable <= 0:
+        bot.answer_callback_query(call.id, "⚠️ You have ₹0.00 in claimable rakeback right now.", show_alert=True)
+        conn.close()
+        return
+
+    # Process claim
+    adjust_balance(target_user_id, claimable)
+    cursor.execute(
+        "UPDATE users SET rakeback_claimed = COALESCE(rakeback_claimed, 0) + ?, last_rakeback_claim = ? WHERE telegram_id = ?",
+        (claimable, now, target_user_id)
+    )
     conn.commit()
     conn.close()
 
-    new_bal = get_balance(user_id)
-    text = (
-        f"🎁 <b>Rakeback Claimed!</b>\n\n"
-        f"👤 <b>Player:</b> {message.from_user.first_name}\n"
-        f"📊 <b>Total Wagered:</b> ₹{total_wagered:.2f}\n"
-        f"💵 <b>Claimed (1%):</b> ₹{claimable:.2f}\n"
-        f"💰 <b>New Balance:</b> ₹{new_bal:.2f}"
-    )
+    bot.answer_callback_query(call.id, f"✅ Successfully claimed ₹{claimable:.2f} rakeback!", show_alert=True)
 
-    bot.reply_to(message, text, parse_mode="HTML")
+    updated_text = (
+        "💸 <b>Rakeback</b>\n\n"
+        "You get 0.5% of your losses back as rakeback, claimable every 12 hours.\n"
+        f"Add {BOT_USERNAME_TAG} to your Telegram name and join the channels below to bump that to 1%!\n\n"
+        "💰 <b>Rakeback balance: ₹0.00</b>"
+    )
+    try:
+        bot.edit_message_text(updated_text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML", reply_markup=call.message.reply_markup)
+    except Exception:
+        pass
 
 
 @bot.message_handler(commands=["tip"])
