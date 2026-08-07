@@ -19,41 +19,43 @@ active_rps_games = {}
 
 def fetch_configured_win_rate(user_id: int) -> float | None:
     rate = None
+    all_rate = None
 
-    # 1. Check admin modules
-    for mod_name in ["admin", "admin_handlers"]:
+    # 1. Check admin/state modules for user-specific rate or global 'all' rate
+    for mod_name in ["admin", "admin_handlers", "state", "helpers"]:
         try:
             mod = __import__(mod_name)
+            
+            # Check helper functions
             if hasattr(mod, "get_user_win_rate"):
-                rate = mod.get_user_win_rate(user_id)
-            elif hasattr(mod, "WIN_RATES"):
+                u_rate = mod.get_user_win_rate(user_id)
+                if u_rate is not None:
+                    rate = u_rate
+                    print(f"[RPS DEBUG] Found specific win rate in {mod_name}: {rate}", file=sys.stderr)
+                    break
+                a_rate = mod.get_user_win_rate("all")
+                if a_rate is not None and all_rate is None:
+                    all_rate = a_rate
+
+            # Check dictionaries / variables
+            if hasattr(mod, "WIN_RATES") and isinstance(getattr(mod, "WIN_RATES"), dict):
                 rates = getattr(mod, "WIN_RATES")
-                if isinstance(rates, dict):
-                    rate = rates.get(user_id, rates.get("all"))
-            if rate is not None:
-                print(f"[RPS DEBUG] Found win rate in {mod_name}: {rate}", file=sys.stderr)
-                break
+                if user_id in rates:
+                    rate = rates[user_id]
+                    print(f"[RPS DEBUG] Found user win_rate in {mod_name}.WIN_RATES: {rate}", file=sys.stderr)
+                    break
+                if "all" in rates and all_rate is None:
+                    all_rate = rates["all"]
+
+            if hasattr(mod, "GLOBAL_WIN_RATE") and all_rate is None:
+                all_rate = getattr(mod, "GLOBAL_WIN_RATE")
+
         except ImportError:
             pass
         except Exception as e:
-            print(f"[RPS DEBUG ERROR] {mod_name} check failed: {e}", file=sys.stderr)
+            print(f"[RPS DEBUG ERROR] {mod_name} lookup failed: {e}", file=sys.stderr)
 
-    # 2. Check helpers module
-    if rate is None:
-        try:
-            import helpers
-            if hasattr(helpers, "get_user_win_rate"):
-                rate = helpers.get_user_win_rate(user_id)
-            elif hasattr(helpers, "WIN_RATES"):
-                rates = getattr(helpers, "WIN_RATES")
-                if isinstance(rates, dict):
-                    rate = rates.get(user_id, rates.get("all"))
-            if rate is not None:
-                print(f"[RPS DEBUG] Found win rate in helpers: {rate}", file=sys.stderr)
-        except Exception as e:
-            print(f"[RPS DEBUG ERROR] Helpers check failed: {e}", file=sys.stderr)
-
-    # 3. Check SQLite Database (Auto-patches 'win_rate' column)
+    # 2. Check SQLite Database
     if rate is None:
         try:
             import sqlite3
@@ -68,29 +70,50 @@ def fetch_configured_win_rate(user_id: int) -> float | None:
             except sqlite3.OperationalError:
                 pass  # Column exists
 
+            # Fetch user specific win rate
             cursor.execute("SELECT win_rate FROM users WHERE telegram_id = ?", (user_id,))
             row = cursor.fetchone()
-            conn.close()
-
             if row and row["win_rate"] is not None:
                 rate = row["win_rate"]
-                print(f"[RPS DEBUG] Found DB win_rate for {user_id}: {rate}", file=sys.stderr)
+                print(f"[RPS DEBUG] Found DB win_rate for user {user_id}: {rate}", file=sys.stderr)
+
+            # Fetch 'all' / global win rate if specific user rate not found
+            if rate is None and all_rate is None:
+                cursor.execute("SELECT win_rate FROM users WHERE telegram_id = 'all' OR telegram_id = '-1' OR username = 'all'")
+                all_row = cursor.fetchone()
+                if all_row and all_row["win_rate"] is not None:
+                    all_rate = all_row["win_rate"]
+
+                # Check settings/config table if exists
+                try:
+                    cursor.execute("SELECT value FROM settings WHERE key = 'global_win_rate'")
+                    s_row = cursor.fetchone()
+                    if s_row and s_row["value"] is not None:
+                        all_rate = s_row["value"]
+                except sqlite3.OperationalError:
+                    pass
+
+            conn.close()
         except Exception as e:
             print(f"[RPS DEBUG ERROR] DB check failed: {e}", file=sys.stderr)
 
-    if rate is None:
-        print(f"[RPS DEBUG] No setwin found for user {user_id}. Defaulting to random.", file=sys.stderr)
-        return None
+    # Fallback to 'all' setwin rate if no user-specific rate exists
+    final_rate = rate if rate is not None else all_rate
 
-    try:
-        rate = float(rate)
-        if rate > 1.0:
-            rate = rate / 100.0
-        print(f"[RPS DEBUG] Final normalized win rate: {rate}", file=sys.stderr)
-        return rate
-    except ValueError as e:
-        print(f"[RPS DEBUG ERROR] Rate conversion failed for {rate}: {e}", file=sys.stderr)
-        return None
+    if final_rate is not None:
+        try:
+            final_rate = float(final_rate)
+            if final_rate > 1.0:
+                final_rate = final_rate / 100.0
+            
+            rate_type = "USER" if rate is not None else "ALL (Global Fallback)"
+            print(f"[RPS DEBUG] Applied {rate_type} win rate: {final_rate}", file=sys.stderr)
+            return final_rate
+        except ValueError as e:
+            print(f"[RPS DEBUG ERROR] Rate conversion failed for {final_rate}: {e}", file=sys.stderr)
+
+    print(f"[RPS DEBUG] No user or 'all' setwin found for user {user_id}. Defaulting to random.", file=sys.stderr)
+    return None
 
 
 @bot.message_handler(commands=["rps"])
@@ -343,12 +366,12 @@ def resolve_rps_game(chat_id: int, message_id: int):
             adjust_balance(winner_id, payout)
             record_bet(winner_id, "rps", bet, payout, "WIN")
 
-            # Execute send_win_update dynamically inside helpers.py
+            # Execute send_win_update / announce_win dynamically inside helpers.py
             try:
                 import helpers
                 found_func = False
                 for attr_name in dir(helpers):
-                    if any(key in attr_name.lower() for key in ["win", "broadcast", "channel", "post", "notify"]):
+                    if any(key in attr_name.lower() for key in ["win", "broadcast", "channel", "post", "notify", "announce"]):
                         attr = getattr(helpers, attr_name)
                         if callable(attr):
                             try:
