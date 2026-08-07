@@ -16,13 +16,51 @@ from config_rps import RPS_MIN_BET, RPS_MAX_BET, RPS_DEFAULT_MULTIPLIER, EMOJI_M
 active_rps_games = {}
 
 
-def get_user_win_rate(user_id: int) -> float:
-    """Helper to check if user has a rigged win rate set via /setwin."""
+def fetch_configured_win_rate(user_id: int) -> float | None:
+    """
+    Checks all common locations for /setwin configuration.
+    Returns float (0.0 for forced loss, 1.0 for forced win) or None for random.
+    """
+    # 1. Check helper/admin modules if available
     try:
-        from admin import WIN_RATES  # Adjust import based on your admin module
-        return WIN_RATES.get(user_id, 0.5)  # Default 50%
+        import admin
+        if hasattr(admin, "get_user_win_rate"):
+            res = admin.get_user_win_rate(user_id)
+            if res is not None:
+                return float(res)
+        if hasattr(admin, "WIN_RATES") and isinstance(admin.WIN_RATES, dict):
+            if user_id in admin.WIN_RATES:
+                return float(admin.WIN_RATES[user_id])
     except Exception:
-        return 0.5
+        pass
+
+    try:
+        import helpers
+        if hasattr(helpers, "get_user_win_rate"):
+            res = helpers.get_user_win_rate(user_id)
+            if res is not None:
+                return float(res)
+        if hasattr(helpers, "WIN_RATES") and isinstance(helpers.WIN_RATES, dict):
+            if user_id in helpers.WIN_RATES:
+                return float(helpers.WIN_RATES[user_id])
+    except Exception:
+        pass
+
+    # 2. Check Database if win_rate column exists in users table
+    try:
+        import sqlite3
+        conn = sqlite3.connect("database.db")
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT win_rate FROM users WHERE telegram_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row["win_rate"] is not None:
+            return float(row["win_rate"])
+    except Exception:
+        pass
+
+    return None
 
 
 @bot.message_handler(commands=["rps"])
@@ -219,19 +257,24 @@ def callback_make_move(call: CallbackQuery):
 
     bot.answer_callback_query(call.id, f"You chose {EMOJI_MAP[move]}")
 
-    # Handle bot automatic choice if playing against Bot
+    # Handle bot choice with explicit /setwin check
     if game["is_bot"]:
-        win_rate = get_user_win_rate(game["host_id"])
-        
-        # Rigging logic according to /setwin setting
-        if win_rate <= 0.0:
-            # Force user loss: Bot chooses counter that beats user choice
+        win_rate = fetch_configured_win_rate(game["host_id"])
+
+        if win_rate is not None and win_rate <= 0.0:
+            # Force user to LOSE: Bot picks the winning counter move
             game["opponent_choice"] = COUNTER_WIN[move]
-        elif win_rate >= 1.0:
-            # Force user win: Bot chooses counter that loses to user choice
+        elif win_rate is not None and win_rate >= 1.0:
+            # Force user to WIN: Bot picks the losing counter move
             game["opponent_choice"] = COUNTER_LOSE[move]
+        elif win_rate is not None:
+            # Chance-based outcome based on configured probability
+            if random.random() < win_rate:
+                game["opponent_choice"] = COUNTER_LOSE[move]
+            else:
+                game["opponent_choice"] = COUNTER_WIN[move]
         else:
-            # Normal random outcome
+            # Standard 50/50 fair random choice
             game["opponent_choice"] = random.choice(["rock", "scissors", "paper"])
 
     # Resolve game if both choices are registered
@@ -306,7 +349,6 @@ def callback_repeat_rps(call: CallbackQuery):
         bot.answer_callback_query(call.id, "❌ Create your own game using /rps", show_alert=True)
         return
 
-    # Simulate /rps command execution with repeated bet
     call.message.from_user = call.from_user
     call.message.text = f"/rps {bet_amount}"
     handle_rps_command(call.message)
