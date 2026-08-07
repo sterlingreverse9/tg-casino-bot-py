@@ -19,110 +19,80 @@ active_rps_games = {}
 
 def fetch_configured_win_rate(user_id: int) -> float | None:
     """
-    Search for user-specific setwin rate first.
-    If not found, search for 'all' / global setwin rate across all modules and DB tables.
+    Search for user-specific setwin rate first from settings.py or DB.
+    If not found, fallback to 'all' setwin rate.
     """
     rate = None
     all_rate = None
 
-    # List of possible modules where setwin/win_rates might be stored
-    modules_to_check = ["admin", "admin_handlers", "state", "helpers", "db", "config"]
-
-    for mod_name in modules_to_check:
-        try:
-            mod = __import__(mod_name)
-
-            # Check helper functions
-            for fn_name in ["get_user_win_rate", "get_win_rate", "fetch_win_rate"]:
-                if hasattr(mod, fn_name):
-                    fn = getattr(mod, fn_name)
-                    try:
-                        u_rate = fn(user_id)
-                        if u_rate is not None and rate is None:
-                            rate = u_rate
-                    except Exception:
-                        pass
-                    try:
-                        a_rate = fn("all")
-                        if a_rate is not None and all_rate is None:
-                            all_rate = a_rate
-                    except Exception:
-                        pass
-
-            # Check dicts / variables (WIN_RATES, SETWIN, WIN_RATE, etc.)
-            for var_name in ["WIN_RATES", "WIN_RATE", "SETWIN", "win_rates", "setwin_rates"]:
-                if hasattr(mod, var_name):
-                    val = getattr(mod, var_name)
-                    if isinstance(val, dict):
-                        # User lookup (int or str)
-                        if user_id in val and rate is None:
-                            rate = val[user_id]
-                        elif str(user_id) in val and rate is None:
-                            rate = val[str(user_id)]
-
-                        # 'all' lookup
-                        for key in ["all", "ALL", "global", "-1", -1]:
-                            if key in val and all_rate is None:
-                                all_rate = val[key]
-
-            # Check global scalar variables
-            for g_var in ["GLOBAL_WIN_RATE", "ALL_WIN_RATE", "DEFAULT_WIN_RATE", "global_win_rate"]:
-                if hasattr(mod, g_var) and all_rate is None:
-                    g_val = getattr(mod, g_var)
-                    if g_val is not None:
-                        all_rate = g_val
-
-        except ImportError:
-            pass
-        except Exception as e:
-            print(f"[RPS DEBUG ERROR] {mod_name} check failed: {e}", file=sys.stderr)
-
-    # Check SQLite Database
+    # 1. Primary check: Import settings module
     try:
-        import sqlite3
-        conn = sqlite3.connect("database.db")
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        import settings
+        
+        # Check standard getter functions inside settings.py
+        for getter in ["get_user_rig_status", "get_rig_status", "get_win_rate"]:
+            if hasattr(settings, getter):
+                fn = getattr(settings, getter)
+                try:
+                    r = fn(str(user_id))
+                    if r is not None:
+                        rate = r
+                except Exception:
+                    pass
+                try:
+                    ar = fn("all")
+                    if ar is not None:
+                        all_rate = ar
+                except Exception:
+                    pass
 
-        # Check 'users' table
+        # Check dictionaries/variables inside settings.py
+        for dict_name in ["USER_RIGS", "RIG_STATUS", "RIG_CONFIG", "WIN_RATES"]:
+            if hasattr(settings, dict_name):
+                d = getattr(settings, dict_name)
+                if isinstance(d, dict):
+                    if str(user_id) in d:
+                        rate = d[str(user_id)]
+                    elif user_id in d:
+                        rate = d[user_id]
+                    
+                    if "all" in d:
+                        all_rate = d["all"]
+
+    except ImportError:
+        print("[RPS DEBUG ERROR] Could not import settings.py", file=sys.stderr)
+    except Exception as e:
+        print(f"[RPS DEBUG ERROR] Exception reading settings.py: {e}", file=sys.stderr)
+
+    # 2. Secondary check: Query SQLite database directly
+    if rate is None or all_rate is None:
         try:
-            cursor.execute("SELECT win_rate FROM users WHERE telegram_id = ? OR telegram_id = ?", (user_id, str(user_id)))
-            row = cursor.fetchone()
-            if row and row["win_rate"] is not None:
-                rate = row["win_rate"]
+            import sqlite3
+            conn = sqlite3.connect("database.db")
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
 
-            if all_rate is None:
-                cursor.execute("SELECT win_rate FROM users WHERE telegram_id IN ('all', 'ALL', '-1', -1) OR username IN ('all', 'ALL')")
-                all_row = cursor.fetchone()
-                if all_row and all_row["win_rate"] is not None:
-                    all_rate = all_row["win_rate"]
-        except sqlite3.OperationalError:
-            pass
-
-        # Check dedicated 'settings', 'config', or 'win_rates' tables if they exist
-        if all_rate is None or rate is None:
-            tables_to_check = ["settings", "config", "win_rates", "setwin"]
-            for tbl in tables_to_check:
+            for table_name in ["settings", "rig_status", "user_rigs", "users"]:
                 try:
                     if rate is None:
-                        cursor.execute(f"SELECT win_rate FROM {tbl} WHERE user_id = ? OR telegram_id = ?", (user_id, str(user_id)))
-                        r = cursor.fetchone()
-                        if r and r[0] is not None:
-                            rate = r[0]
+                        cursor.execute(f"SELECT win_rate FROM {table_name} WHERE target = ? OR telegram_id = ?", (str(user_id), user_id))
+                        row = cursor.fetchone()
+                        if row and row[0] is not None:
+                            rate = row[0]
 
                     if all_rate is None:
-                        cursor.execute(f"SELECT value FROM {tbl} WHERE key IN ('global_win_rate', 'all', 'setwin_all', 'win_rate')")
-                        r = cursor.fetchone()
-                        if r and r[0] is not None:
-                            all_rate = r[0]
+                        cursor.execute(f"SELECT win_rate FROM {table_name} WHERE target = 'all' OR telegram_id = 'all'")
+                        row = cursor.fetchone()
+                        if row and row[0] is not None:
+                            all_rate = row[0]
                 except sqlite3.OperationalError:
                     pass
 
-        conn.close()
-    except Exception as e:
-        print(f"[RPS DEBUG ERROR] DB search failed: {e}", file=sys.stderr)
+            conn.close()
+        except Exception as e:
+            print(f"[RPS DEBUG ERROR] Database lookup failed: {e}", file=sys.stderr)
 
-    # Determine final rate (User rate takes priority, fallback to 'all' rate)
+    # Apply precedence: User-specific rate > 'all' global rate
     final_rate = rate if rate is not None else all_rate
 
     if final_rate is not None:
@@ -132,11 +102,11 @@ def fetch_configured_win_rate(user_id: int) -> float | None:
             if final_rate > 1.0:
                 final_rate = final_rate / 100.0
 
-            source_type = "USER" if rate is not None else "ALL (Global Fallback)"
-            print(f"[RPS DEBUG] Found {source_type} setwin rate: {final_rate} (raw: {rate if rate is not None else all_rate})", file=sys.stderr)
+            rate_type = "USER" if rate is not None else "ALL (Global Fallback)"
+            print(f"[RPS DEBUG] Applied {rate_type} setwin rate: {final_rate}", file=sys.stderr)
             return final_rate
         except (ValueError, TypeError) as e:
-            print(f"[RPS DEBUG ERROR] Invalid win rate value ({final_rate}): {e}", file=sys.stderr)
+            print(f"[RPS DEBUG ERROR] Failed to convert win rate ({final_rate}): {e}", file=sys.stderr)
 
     print(f"[RPS DEBUG] No user or 'all' setwin found for user {user_id}. Defaulting to random.", file=sys.stderr)
     return None
@@ -392,7 +362,6 @@ def resolve_rps_game(chat_id: int, message_id: int):
             adjust_balance(winner_id, payout)
             record_bet(winner_id, "rps", bet, payout, "WIN")
 
-            # Execute send_win_update / announce_win dynamically inside helpers.py
             try:
                 import helpers
                 found_func = False
