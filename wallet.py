@@ -1,7 +1,6 @@
 import sqlite3
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from bot_instance import bot
-from helpers import get_target_user
 
 # Default Wager Multiplier
 WAGER_MULTIPLIER = 1.0
@@ -191,6 +190,8 @@ def handle_wallet(message: Message):
 # Tip Command (/tip)
 @bot.message_handler(commands=["tip"])
 def handle_tip(message: Message):
+    from helpers import get_target_user  # Inside handler to avoid circular import
+
     sender_id = message.from_user.id
     get_or_create_user(sender_id, message.from_user.username, message.from_user.first_name)
 
@@ -256,7 +257,6 @@ def handle_rakeback(message: Message):
     conn.close()
 
     total_wagered = float(row["total_bets"]) if row and row["total_bets"] else 0.0
-    # 1% Rakeback calculation
     rakeback_amt = round(total_wagered * 0.01, 2)
 
     text = (
