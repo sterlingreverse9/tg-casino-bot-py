@@ -20,17 +20,17 @@ RPS_WIN_CHANCE = 45.0
 active_rps_games = {}
 
 
-@bot.message_handler(commands=["setwincf"])
-def handle_setwincf_command(message: Message):
+@bot.message_handler(commands=["setwinrps"])
+def handle_setwinrps_command(message: Message):
     """
     Command to dynamically update the RPS win rate inside this file.
-    Usage: /setwincf 45
+    Usage: /setwinrps 45
     """
     global RPS_WIN_CHANCE
     
     parts = message.text.split()
     if len(parts) < 2:
-        bot.reply_to(message, f"⚙️ <b>Current RPS Win Chance:</b> {RPS_WIN_CHANCE}%\n\nUsage: <code>/setwincf &lt;0-100&gt;</code>", parse_mode="HTML")
+        bot.reply_to(message, f"⚙️ <b>Current RPS Win Chance:</b> {RPS_WIN_CHANCE}%\n\nUsage: <code>/setwinrps &lt;0-100&gt;</code>", parse_mode="HTML")
         return
 
     try:
@@ -59,6 +59,7 @@ def handle_rps_command(message: Message):
         if resolved is not None:
             bet_amount = resolved
 
+    # Enforce Bet Limits Strictly
     if bet_amount < RPS_MIN_BET:
         bot.reply_to(message, f"⚠️ The bet cannot be lower than ₹{RPS_MIN_BET:.2f}")
         return
@@ -124,6 +125,11 @@ def callback_play_bot(call: CallbackQuery):
         bot.answer_callback_query(call.id, "❌ You did not create this game!", show_alert=True)
         return
 
+    # Verify Bet Limits Again Before Execution
+    if bet_amount < RPS_MIN_BET or bet_amount > RPS_MAX_BET:
+        bot.answer_callback_query(call.id, f"❌ Bet must be between ₹{RPS_MIN_BET} and ₹{RPS_MAX_BET}", show_alert=True)
+        return
+
     user_bal = get_balance(host_id)
     if user_bal < bet_amount:
         bot.answer_callback_query(call.id, "❌ Insufficient balance to start!", show_alert=True)
@@ -158,6 +164,11 @@ def callback_accept_pvp(call: CallbackQuery):
 
     if opponent.id == host_id:
         bot.answer_callback_query(call.id, "❌ You cannot play against yourself!", show_alert=True)
+        return
+
+    # Verify Bet Limits Again Before Acceptance
+    if bet_amount < RPS_MIN_BET or bet_amount > RPS_MAX_BET:
+        bot.answer_callback_query(call.id, f"❌ Bet must be between ₹{RPS_MIN_BET} and ₹{RPS_MAX_BET}", show_alert=True)
         return
 
     opp_bal = get_balance(opponent.id)
@@ -239,7 +250,6 @@ def callback_make_move(call: CallbackQuery):
     bot.answer_callback_query(call.id, f"You chose {EMOJI_MAP[move]}")
 
     if game["is_bot"]:
-        # Probability check using local RPS_WIN_CHANCE
         win_probability = RPS_WIN_CHANCE / 100.0
 
         if win_probability <= 0.0:
@@ -250,10 +260,8 @@ def callback_make_move(call: CallbackQuery):
             print(f"[RPS DEBUG] FORCED WIN (Rate {RPS_WIN_CHANCE}%): User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
         else:
             if random.random() < win_probability:
-                # User Wins: Bot picks the choice that loses to user's move
                 game["opponent_choice"] = COUNTER_LOSE[move]
             else:
-                # User Loses: Bot picks the choice that beats user's move
                 game["opponent_choice"] = COUNTER_WIN[move]
             print(f"[RPS DEBUG] PROBABILITY RESULT (Chance: {RPS_WIN_CHANCE}%): Bot picked {game['opponent_choice']}", file=sys.stderr)
 
@@ -335,9 +343,14 @@ def resolve_rps_game(chat_id: int, message_id: int):
         )
 
     markup = InlineKeyboardMarkup(row_width=2)
+
+    # Repeat buttons check limits before constructing
+    repeat_bet = min(max(bet, RPS_MIN_BET), RPS_MAX_BET)
+    double_bet = min(bet * 2, RPS_MAX_BET)
+
     markup.add(
-        InlineKeyboardButton("🔄 Repeat", callback_data=f"rps_repeat:{game['host_id']}:{bet}"),
-        InlineKeyboardButton("×2 Double", callback_data=f"rps_repeat:{game['host_id']}:{bet * 2}")
+        InlineKeyboardButton("🔄 Repeat", callback_data=f"rps_repeat:{game['host_id']}:{repeat_bet}"),
+        InlineKeyboardButton("×2 Double", callback_data=f"rps_repeat:{game['host_id']}:{double_bet}")
     )
 
     bot.edit_message_text(res_text, chat_id=chat_id, message_id=message_id, parse_mode="HTML", reply_markup=markup)
@@ -352,6 +365,12 @@ def callback_repeat_rps(call: CallbackQuery):
     if call.from_user.id != user_id:
         bot.answer_callback_query(call.id, "❌ Create your own game using /rps", show_alert=True)
         return
+
+    # Cap bet_amount within limits on repeat
+    if bet_amount > RPS_MAX_BET:
+        bet_amount = RPS_MAX_BET
+    elif bet_amount < RPS_MIN_BET:
+        bet_amount = RPS_MIN_BET
 
     call.message.from_user = call.from_user
     call.message.text = f"/rps {bet_amount}"
