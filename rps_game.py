@@ -15,7 +15,7 @@ from wallet import (
 from config_rps import RPS_MIN_BET, RPS_MAX_BET, RPS_DEFAULT_MULTIPLIER, EMOJI_MAP, COUNTER_WIN, COUNTER_LOSE
 
 # Default win chance defined inside this file (45%)
-RPS_WIN_CHANCE = 45.0
+RPS_WIN_CHANCE = 40.0
 
 active_rps_games = {}
 
