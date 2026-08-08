@@ -27,7 +27,7 @@ def init_db():
             telegram_id INTEGER PRIMARY KEY,
             username TEXT,
             first_name TEXT,
-            balance REAL DEFAULT 100.0,
+            balance REAL DEFAULT 0.0,
             wager_required REAL DEFAULT 0.0,
             rakeback_claimed REAL DEFAULT 0.0,
             last_rakeback_claim REAL DEFAULT 0.0,
@@ -50,7 +50,7 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS house (
             id INTEGER PRIMARY KEY,
-            balance REAL DEFAULT 100000.0
+            balance REAL DEFAULT 0.0
         )
     """)
     cursor.execute("INSERT OR IGNORE INTO house (id, balance) VALUES (1, 100000.0)")
@@ -81,7 +81,7 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
     if not user:
         cursor.execute(
             "INSERT INTO users (telegram_id, username, first_name, balance, is_bot) VALUES (?, ?, ?, ?, ?)",
-            (telegram_id, username, first_name, 100.0, 0)
+            (telegram_id, username, first_name, 00.0, 0)
         )
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
