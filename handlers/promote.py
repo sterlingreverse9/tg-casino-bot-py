@@ -50,22 +50,26 @@ def build_promote_dashboard():
     return markup, status_str
 
 
-# Async wrappers to execute Pyrogram operations cleanly inside Telebot threads
+# Helper function running inside a dedicated thread loop to manage persistent Pyrogram connections
+def run_in_loop(coro):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 async def _async_send_otp(api_id, api_hash, phone):
     cli = Client(
         f"temp_{phone}", api_id=api_id, api_hash=api_hash, in_memory=True
     )
     await cli.connect()
     sent_code = await cli.send_code(phone)
-    await cli.disconnect()
-    return sent_code.phone_code_hash
+    return cli, sent_code.phone_code_hash
 
 
-async def _async_sign_in(api_id, api_hash, phone, phone_code_hash, otp):
-    cli = Client(
-        f"temp_{phone}", api_id=api_id, api_hash=api_hash, in_memory=True
-    )
-    await cli.connect()
+async def _async_sign_in(cli, phone, phone_code_hash, otp):
     await cli.sign_in(phone, phone_code_hash, otp)
     session_str = await cli.export_session_string()
     await cli.disconnect()
@@ -271,9 +275,10 @@ def process_promote_inputs(message):
         state["phone"] = phone
 
         try:
-            phone_code_hash = asyncio.run(
+            cli, phone_code_hash = run_in_loop(
                 _async_send_otp(state["api_id"], state["api_hash"], phone)
             )
+            state["client"] = cli
             state["phone_code_hash"] = phone_code_hash
             state["step"] = "OTP"
             bot.send_message(
@@ -288,13 +293,10 @@ def process_promote_inputs(message):
     elif step == "OTP":
         otp = message.text.strip()
         try:
-            session_str = asyncio.run(
+            cli = state["client"]
+            session_str = run_in_loop(
                 _async_sign_in(
-                    state["api_id"],
-                    state["api_hash"],
-                    state["phone"],
-                    state["phone_code_hash"],
-                    otp,
+                    cli, state["phone"], state["phone_code_hash"], otp
                 )
             )
             add_account(
@@ -307,7 +309,8 @@ def process_promote_inputs(message):
             )
         except Exception as e:
             bot.send_message(chat_id, f"❌ Login failed: {e}")
-        del USER_STATES[chat_id]
+        finally:
+            del USER_STATES[chat_id]
 
     elif step == "SET_PROMOTE_MSG":
         set_setting("promote_msg", message.text)
