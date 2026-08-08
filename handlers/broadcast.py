@@ -6,13 +6,15 @@ from chats import get_all_chats
 
 @bot.message_handler(commands=["announce"])
 def cmd_announce(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id, message.from_user.username):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
+
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        bot.reply_to(message, "Usage: /announce <message>")
+        bot.reply_to(message, "⚠️ <b>Usage:</b> <code>/announce &lt;message&gt;</code>", parse_mode="HTML")
         return
+
     text = parts[1]
     bot.reply_to(message, "🔄 Sending announcement...")
 
@@ -20,6 +22,7 @@ def cmd_announce(message):
     group_sent = group_failed = 0
     channel_sent = channel_failed = 0
 
+    # 1. Send to all registered users (DM)
     for u in select("users"):
         uid = int(u["telegram_id"])
         uname = u.get("username")
@@ -30,12 +33,14 @@ def cmd_announce(message):
         except Exception:
             dm_failed += 1
 
+    # 2. Fetch all channels/groups
     try:
         chats = get_all_chats()
     except Exception as e:
-        print(f"Failed to fetch chats list: {e}")
+        print(f"[ANNOUNCE] Failed to fetch chats list: {e}")
         chats = []
 
+    # 3. Send to channels & groups
     for c in chats:
         cid = int(c["chat_id"])
         is_channel = c.get("chat_type") == "channel"
@@ -56,47 +61,48 @@ def cmd_announce(message):
                 group_failed += 1
 
     report = (
-        "📊 Announcement Report\n\n"
-        f"Total channels sent: {channel_sent}\n"
-        f"Failed to send channel: {channel_failed}\n"
-        f"Total group send: {group_sent}\n"
-        f"Failed to send group: {group_failed}\n"
-        f"Total dm send: {dm_sent}\n"
-        f"Failed to send dm: {dm_failed}"
+        "📊 <b>Announcement Report</b>\n\n"
+        f"📢 Channels Sent: {channel_sent} (Failed: {channel_failed})\n"
+        f"👥 Groups Sent: {group_sent} (Failed: {group_failed})\n"
+        f"💬 DMs Sent: {dm_sent} (Failed: {dm_failed})"
     )
-    bot.reply_to(message, report)
+    bot.reply_to(message, report, parse_mode="HTML")
 
 
 @bot.message_handler(commands=["msg"])
 def cmd_msg(message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id, message.from_user.username):
         bot.reply_to(message, "You don't have permission to use this command.")
         return
+
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
-        bot.reply_to(message, "Usage: /msg <username> <message>")
+        bot.reply_to(message, "⚠️ <b>Usage:</b> <code>/msg &lt;username&gt; &lt;message&gt;</code>", parse_mode="HTML")
         return
 
     username = parts[1].lstrip("@")
     text = parts[2]
     target = select("users", filters={"username": username}, single=True)
     if target is None:
-        bot.reply_to(message, "User not found.")
+        bot.reply_to(message, "❌ User not found in database.")
         return
-    target_id = int(target["telegram_id"])
 
+    target_id = int(target["telegram_id"])
     dm_ok = True
-    bot.reply_to(message, f"🔄 Sending to @{username}...")
+    bot.reply_to(message, f"🔄 Sending message to @{username}...")
+
+    # Send Direct Message
     try:
-        bot.send_message(target_id, f"📩 Message from admin:\n{text}")
+        bot.send_message(target_id, f"📩 <b>Message from Admin:</b>\n{text}", parse_mode="HTML")
     except Exception:
         dm_ok = False
 
+    # Tag user in shared groups
     group_count = 0
     try:
         chats = get_all_chats()
     except Exception as e:
-        print(f"Failed to fetch chats list: {e}")
+        print(f"[MSG] Failed to fetch chats: {e}")
         chats = []
 
     for c in chats:
@@ -111,4 +117,9 @@ def cmd_msg(message):
         except Exception:
             continue
 
-    bot.reply_to(message, f"✅ Sent to @{username}'s DM ({'ok' if dm_ok else 'failed'}) and {group_count} shared group(s).")
+    status_str = "sent" if dm_ok else "failed"
+    bot.reply_to(
+        message,
+        f"✅ DM to @{username}: <b>{status_str}</b>\n👥 Shared groups notified: <b>{group_count}</b>",
+        parse_mode="HTML"
+    )
