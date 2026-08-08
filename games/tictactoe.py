@@ -1,4 +1,5 @@
 import random
+import time
 
 
 class TicTacToeGame:
@@ -11,6 +12,7 @@ class TicTacToeGame:
         player2_id,
         player2_name,
         bet_amount,
+        payout_multiplier=1.90,
     ):
         self.game_id = game_id
         self.player1_id = player1_id  # Challenger
@@ -18,6 +20,7 @@ class TicTacToeGame:
         self.player2_id = player2_id  # Challenged
         self.player2_name = player2_name
         self.bet_amount = float(bet_amount)
+        self.payout_multiplier = float(payout_multiplier)
 
         # 3x3 board stored as flat list of 9 elements
         self.board = ["⬜"] * 9
@@ -28,7 +31,8 @@ class TicTacToeGame:
 
         self.turn = "X"  # X always moves first
         self.is_finished = False
-        self.winner = None  # None, 'X', 'O', or 'TIE'
+        self.winner = None  # None, 'X', 'O', 'TIE', or 'TIMEOUT'
+        self.last_move_time = time.time()  # Track 30s timer start
 
     def current_player_id(self):
         return self.x_player[0] if self.turn == "X" else self.o_player[0]
@@ -37,10 +41,40 @@ class TicTacToeGame:
         return self.x_player[1] if self.turn == "X" else self.o_player[1]
 
     def get_payout(self):
-        """Calculates winning payout using a 10% house edge (1.90x payout multiplier)."""
-        return int(self.bet_amount * 1.90)
+        """Calculates winning payout using the configured multiplier."""
+        return int(self.bet_amount * self.payout_multiplier)
+
+    def check_timeout(self):
+        """Checks if 30 seconds passed without a move.
+
+        If timed out, automatically awards the win to the opponent.
+        """
+        if self.is_finished:
+            return False, None
+
+        if time.time() - self.last_move_time > 30:
+            self.is_finished = True
+            # The player who DID NOT play loses; opponent wins
+            winning_symbol = "O" if self.turn == "X" else "X"
+            self.winner = winning_symbol
+            winner_name = (
+                self.x_player[1]
+                if winning_symbol == "X"
+                else self.o_player[1]
+            )
+            return (
+                True,
+                f"⏰ Timeout! 30 seconds expired. {winner_name} wins by forfeit!",
+            )
+
+        return False, None
 
     def make_move(self, position, player_id):
+        # 1. Check for timeout first before accepting a move
+        timed_out, timeout_msg = self.check_timeout()
+        if timed_out:
+            return False, timeout_msg
+
         if self.is_finished:
             return False, "Game is already finished."
 
@@ -63,6 +97,7 @@ class TicTacToeGame:
             return True, "TIE"
         else:
             self.turn = "O" if self.turn == "X" else "X"
+            self.last_move_time = time.time()  # Reset 30s timer for next player
             return True, "CONTINUE"
 
     def check_winner(self, symbol):
