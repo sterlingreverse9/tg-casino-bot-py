@@ -1,6 +1,4 @@
 import asyncio
-import rps_game
-import handlers.ttt
 
 # Python 3.14 Pyrogram compatibility patch
 _orig_get_event_loop = asyncio.get_event_loop
@@ -25,14 +23,14 @@ import traceback
 from config import CASINO_NAME
 from bot_instance import bot
 
-# Handlers
+# Keep RPS and TicTacToe
+import rps_game
+import handlers.ttt
 import handlers.promote
-import handlers.pvp_game  # Unified PVP / Bot Handler
 
 # Wallet & Dynamic Cards
 from wallet import get_balance, setup_secret_wallet_handlers
 from balance_card import generate_balance_card
-from handlers.dice_duel import setup_dice_handlers
 
 
 # --- HIGH-PRIORITY BALANCE CARD HANDLER ---
@@ -82,7 +80,6 @@ def cmd_show_balance(message):
 
 # Register Priority Handlers
 setup_secret_wallet_handlers(bot)
-setup_dice_handlers(bot)  # Registered BEFORE command & basic text handlers
 
 # --- Import priority interaction handlers BEFORE handlers.basic ---
 import handlers.deposit
@@ -96,9 +93,6 @@ import handlers.tower
 import handlers.referral
 import handlers.tracking
 import handlers.broadcast
-
-# REGISTER DICE ROLL MODULE HERE
-import games.dice_roll
 
 # Catch-all text handlers should be imported LAST
 import handlers.basic
