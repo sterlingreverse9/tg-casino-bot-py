@@ -7,10 +7,10 @@ MAX_MULTIPLIER = 1000
 
 # (low, high, probability) — probabilities sum to 1.0
 BUCKETS = [
-    (1.00, 1.00, 0.15),      # 10% (strictly 1.00x)
+    (1.00, 1.00, 0.15),      # 15% (strictly 1.00x)
     (1.01, 1.50, 0.18),      # 18%
     (1.50, 2.00, 0.36),      # 36%
-    (2.00, 3.00, 0.15),      # 20%
+    (2.00, 3.00, 0.15),      # 15%
     (3.00, 5.00, 0.08),      # 8%
     (5.00, 10.00, 0.04),     # 4%
     (10.00, 50.00, 0.03),    # 3%
@@ -20,7 +20,7 @@ BUCKETS = [
 
 def parse_multiplier(text: str):
     """'2x', '2X', or '2' -> 2.0. Returns None if invalid."""
-    s = text.lower().rstrip("x")
+    s = text.lower().rstrip("x").strip()
     try:
         value = float(s)
     except ValueError:
@@ -49,13 +49,13 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
     max_bet = get_max_bet(get_house_balance())
 
     if bet_amount < min_bet:
-        bot.send_message(chat_id, f"Minimum bet is {min_bet} coins.")
+        bot.send_message(chat_id, f"⚠️ Minimum bet is ₹{min_bet:.2f}")
         return
     if bet_amount > max_bet:
-        bot.send_message(chat_id, f"Maximum bet is {round(max_bet, 2)} coins.")
+        bot.send_message(chat_id, f"⚠️ Maximum bet is ₹{max_bet:.2f}")
         return
     if bet_amount > balance:
-        bot.send_message(chat_id, f"Not enough balance. Your balance: ₹{balance:.2f}")
+        bot.send_message(chat_id, f"❌ Insufficient balance! Your balance: ₹{balance:.2f}")
         return
 
     adjust_balance(telegram_id, -bet_amount)
@@ -87,9 +87,9 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
     mult_arrow = "⬆️" if won else "⬇️"
 
     message = (
-        f"{header_arrow} Limbo\n\n"
+        f"{header_arrow} <b>Limbo</b>\n\n"
         f"₹{bet_amount:.2f} → ₹{payout:.2f} ({display_result:.2f}×)\n\n"
         f"Multiplier: {target_multiplier:.2f}× {mult_arrow}"
     )
 
-    bot.send_message(chat_id, message)
+    bot.send_message(chat_id, message, parse_mode="HTML")
