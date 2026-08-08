@@ -8,8 +8,7 @@ from wallet import get_balance, adjust_balance, record_bet
 
 REQUIRED_TAG = "@thecassinobot"
 
-# In-memory tracking for multi-step creation flow
-# Structure: { telegram_id: {"step": "code_name"|"max_users"|"amount", "data": {...}} }
+# In-memory state tracking for step-by-step creation flow
 CODE_CREATION_FLOW = {}
 
 
@@ -43,7 +42,7 @@ def start_makecode_flow(message: Message):
 
 @bot.message_handler(func=lambda msg: msg.from_user.id in CODE_CREATION_FLOW and not msg.text.startswith("/"))
 def handle_makecode_steps(message: Message):
-    """Handles the multi-step inputs for creating a code."""
+    """Handles multi-step inputs for creating a promo code."""
     telegram_id = message.from_user.id
     user_state = CODE_CREATION_FLOW.get(telegram_id)
 
@@ -55,21 +54,23 @@ def handle_makecode_steps(message: Message):
 
     # STEP 1: Code Name Input
     if step == "code_name":
-        if len(text_input) < 4 or not text_input.isalnum():
+        clean_code = text_input.upper()
+        if len(clean_code) < 4 or not clean_code.isalnum():
             bot.reply_to(message, "⚠️ Invalid code name! Must be at least 4 alphanumeric characters without spaces.")
             return
 
-        # Check existing code in Supabase
-        existing = select("promo_codes", filters={"code_name": text_input}, single=True)
-        if existing:
-            bot.reply_to(message, "⚠️ A promo code with this name already exists! Enter a different name.")
-            return
+        # Case-insensitive check in DB
+        existing_codes = select("promo_codes") or []
+        for c in existing_codes:
+            if c.get("code_name", "").strip().upper() == clean_code:
+                bot.reply_to(message, "⚠️ A promo code with this name already exists! Enter a different name.")
+                return
 
-        user_state["data"]["code_name"] = text_input
+        user_state["data"]["code_name"] = clean_code
         user_state["step"] = "max_users"
 
         reply_text = (
-            f"✅ <b>Code Name set to:</b> {text_input}\n\n"
+            f"✅ <b>Code Name set to:</b> {clean_code}\n\n"
             f"👇 Enter <b>max users</b> who can claim this code (e.g., 4, 10):"
         )
         bot.reply_to(message, reply_text, parse_mode="HTML")
@@ -107,7 +108,7 @@ def handle_makecode_steps(message: Message):
         code_name = user_state["data"]["code_name"]
         max_users = user_state["data"]["max_users"]
 
-        # Calculate Total with 2.5% fee
+        # Calculate Total Cost + 2.5% Making Fee
         subtotal = amount_per_user * max_users
         total_deducted = subtotal * 1.025
 
@@ -117,12 +118,11 @@ def handle_makecode_steps(message: Message):
             del CODE_CREATION_FLOW[telegram_id]
             return
 
-        # Deduct balance from creator
+        # Deduct total amount from creator's wallet
         adjust_balance(telegram_id, -total_deducted)
 
-        creator_username = message.from_user.username or message.from_user.first_name
+        creator_username = message.from_user.username or message.from_user.first_name or "Admin"
 
-        # Valid schema insert matching Supabase promo_codes table
         record = {
             "code_id": uuid.uuid4().hex[:10],
             "creator_id": telegram_id,
@@ -137,7 +137,6 @@ def handle_makecode_steps(message: Message):
         res = insert("promo_codes", record)
 
         if res:
-            # Reply confirmation to Admin
             bot.reply_to(
                 message,
                 f"CODE MADE 🎉\n"
@@ -147,7 +146,6 @@ def handle_makecode_steps(message: Message):
                 f"use /claim {code_name} to claim"
             )
 
-            # Announcement message
             announcement = (
                 f"🚨 <b>NEW PROMO CODE CREATED</b>\n"
                 f"👤 <b>Creator:</b> @{creator_username} ({telegram_id})\n"
@@ -158,7 +156,7 @@ def handle_makecode_steps(message: Message):
             )
             bot.send_message(message.chat.id, announcement, parse_mode="HTML")
         else:
-            # Refund on failure
+            # Refund creator if insert fails
             adjust_balance(telegram_id, total_deducted)
             bot.reply_to(message, "❌ Database insertion failed. Funds refunded.")
 
@@ -167,11 +165,11 @@ def handle_makecode_steps(message: Message):
 
 @bot.message_handler(commands=["redeem", "claim", "code"])
 def redeem_code_cmd(message: Message):
-    """Redeems a promotional code for balance rewards."""
+    """Redeems a promotional code case-insensitively with tag enforcement."""
     telegram_id = message.from_user.id
     user_obj = message.from_user
 
-    # Tag Verification Requirement
+    # Require @thecassinobot tag in user's Telegram profile name or username
     first_name = user_obj.first_name or ""
     last_name = user_obj.last_name or ""
     username = user_obj.username or ""
@@ -191,55 +189,47 @@ def redeem_code_cmd(message: Message):
         bot.reply_to(message, "⚠️ Usage: <code>/claim &lt;code&gt;</code>", parse_mode="HTML")
         return
 
-    promo_code = args[0].strip()
+    input_code = args[0].strip().upper()
 
-    # Fetch from Supabase 'promo_codes'
-    code_data = select("promo_codes", filters={"code_name": promo_code}, single=True)
+    # Case-insensitive lookup across all promo codes
+    all_codes = select("promo_codes") or []
+    code_data = None
+    for c in all_codes:
+        if c.get("code_name", "").strip().upper() == input_code:
+            code_data = c
+            break
+
     if not code_data:
         bot.reply_to(message, "❌ Invalid or expired promo code.")
         return
 
+    code_name = code_data.get("code_name")
     max_claims = code_data.get("max_users", 1)
     reward_amount = float(code_data.get("amount_per_user", 0.0))
+    claimed_by = code_data.get("claimed_by") or []
 
-    # Calculate claim count dynamically from code_claims
-    existing_claims = select("code_claims", filters={"code": promo_code}) or []
-    current_claims = len(existing_claims)
-
-    if current_claims >= max_claims:
+    # Check if max claims reached
+    if len(claimed_by) >= max_claims:
         bot.reply_to(message, "❌ This promo code has reached its maximum claim limit!")
         return
 
-    # Check if user already claimed this specific code
-    already_claimed = select("code_claims", filters={"code": promo_code, "user_id": telegram_id}, single=True)
-    if already_claimed:
+    # Check if user already claimed
+    if telegram_id in claimed_by:
         bot.reply_to(message, "⚠️ You have already claimed this promo code!")
         return
 
     try:
-        claim_entry = insert("code_claims", {
-            "code": promo_code,
-            "user_id": telegram_id,
-            "reward": reward_amount
-        })
+        # Update claimed_by list array
+        claimed_by.append(telegram_id)
+        update("promo_codes", filters={"code_name": code_name}, values={"claimed_by": claimed_by})
 
-        if not claim_entry:
-            bot.reply_to(message, "❌ Claim failed. Please try again.")
-            return
-
-        new_claim_count = current_claims + 1
-
-        # Keep claimed_by list updated in promo_codes
-        claimed_by = code_data.get("claimed_by", [])
-        if telegram_id not in claimed_by:
-            claimed_by.append(telegram_id)
-            update("promo_codes", filters={"code_name": promo_code}, values={"claimed_by": claimed_by})
-
-        # Credit user balance
+        # Credit reward to claimer
         adjust_balance(telegram_id, reward_amount)
         record_bet(telegram_id, "promo_code", 0.0, reward_amount, "win")
 
         user_name_escaped = html.escape(first_name or "User")
+        new_claim_count = len(claimed_by)
+
         bot.reply_to(
             message,
             f"🎉 <b>Code Claimed Successfully!</b>\n\n"
