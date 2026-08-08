@@ -1,4 +1,6 @@
 import html
+import uuid
+import datetime
 from telebot.types import Message
 from bot_instance import bot
 from db import select, insert, update
@@ -120,21 +122,22 @@ def handle_makecode_steps(message: Message):
 
         creator_username = message.from_user.username or message.from_user.first_name
 
-        # Insert into Supabase table 'promo_codes'
+        # Valid schema insert matching Supabase promo_codes table
         record = {
+            "code_id": uuid.uuid4().hex[:10],
             "creator_id": telegram_id,
             "creator_username": creator_username,
             "code_name": code_name,
             "max_users": max_users,
             "amount_per_user": amount_per_user,
             "total_cost": total_deducted,
-            "claimed_count": 0,
-            "is_active": True
+            "claimed_by": [],
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         res = insert("promo_codes", record)
 
         if res:
-            # 1. Reply to Admin
+            # Reply confirmation to Admin
             bot.reply_to(
                 message,
                 f"CODE MADE 🎉\n"
@@ -144,7 +147,7 @@ def handle_makecode_steps(message: Message):
                 f"use /claim {code_name} to claim"
             )
 
-            # 2. Announcement Summary
+            # Announcement message
             announcement = (
                 f"🚨 <b>NEW PROMO CODE CREATED</b>\n"
                 f"👤 <b>Creator:</b> @{creator_username} ({telegram_id})\n"
@@ -196,19 +199,18 @@ def redeem_code_cmd(message: Message):
         bot.reply_to(message, "❌ Invalid or expired promo code.")
         return
 
-    if not code_data.get("is_active", True):
-        bot.reply_to(message, "❌ This promo code is no longer active.")
-        return
-
     max_claims = code_data.get("max_users", 1)
-    current_claims = code_data.get("claimed_count", 0)
     reward_amount = float(code_data.get("amount_per_user", 0.0))
+
+    # Calculate claim count dynamically from code_claims
+    existing_claims = select("code_claims", filters={"code": promo_code}) or []
+    current_claims = len(existing_claims)
 
     if current_claims >= max_claims:
         bot.reply_to(message, "❌ This promo code has reached its maximum claim limit!")
         return
 
-    # Check claimed state from 'code_claims'
+    # Check if user already claimed this specific code
     already_claimed = select("code_claims", filters={"code": promo_code, "user_id": telegram_id}, single=True)
     if already_claimed:
         bot.reply_to(message, "⚠️ You have already claimed this promo code!")
@@ -226,12 +228,12 @@ def redeem_code_cmd(message: Message):
             return
 
         new_claim_count = current_claims + 1
-        update_data = {"claimed_count": new_claim_count}
 
-        if new_claim_count >= max_claims:
-            update_data["is_active"] = False
-
-        update("promo_codes", filters={"code_name": promo_code}, values=update_data)
+        # Keep claimed_by list updated in promo_codes
+        claimed_by = code_data.get("claimed_by", [])
+        if telegram_id not in claimed_by:
+            claimed_by.append(telegram_id)
+            update("promo_codes", filters={"code_name": promo_code}, values={"claimed_by": claimed_by})
 
         # Credit user balance
         adjust_balance(telegram_id, reward_amount)
