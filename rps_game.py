@@ -14,102 +14,36 @@ from wallet import (
 )
 from config_rps import RPS_MIN_BET, RPS_MAX_BET, RPS_DEFAULT_MULTIPLIER, EMOJI_MAP, COUNTER_WIN, COUNTER_LOSE
 
+# Default win chance defined inside this file (45%)
+RPS_WIN_CHANCE = 45.0
+
 active_rps_games = {}
 
 
-def fetch_configured_win_rate(user_id: int) -> float | None:
+@bot.message_handler(commands=["setwincf"])
+def handle_setwincf_command(message: Message):
     """
-    Search for user-specific setwin rate first from settings.py or DB.
-    If not found, fallback to 'all' setwin rate.
+    Command to dynamically update the RPS win rate inside this file.
+    Usage: /setwincf 45
     """
-    rate = None
-    all_rate = None
+    global RPS_WIN_CHANCE
+    
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, f"⚙️ <b>Current RPS Win Chance:</b> {RPS_WIN_CHANCE}%\n\nUsage: <code>/setwincf &lt;0-100&gt;</code>", parse_mode="HTML")
+        return
 
-    # 1. Primary check: Import settings module
     try:
-        import settings
-        
-        # Check standard getter functions inside settings.py
-        for getter in ["get_user_rig_status", "get_rig_status", "get_win_rate"]:
-            if hasattr(settings, getter):
-                fn = getattr(settings, getter)
-                try:
-                    r = fn(str(user_id))
-                    if r is not None:
-                        rate = r
-                except Exception:
-                    pass
-                try:
-                    ar = fn("all")
-                    if ar is not None:
-                        all_rate = ar
-                except Exception:
-                    pass
+        new_rate = float(parts[1].rstrip("%"))
+        if new_rate < 0.0 or new_rate > 100.0:
+            bot.reply_to(message, "❌ Win chance must be between 0 and 100.")
+            return
 
-        # Check dictionaries/variables inside settings.py
-        for dict_name in ["USER_RIGS", "RIG_STATUS", "RIG_CONFIG", "WIN_RATES"]:
-            if hasattr(settings, dict_name):
-                d = getattr(settings, dict_name)
-                if isinstance(d, dict):
-                    if str(user_id) in d:
-                        rate = d[str(user_id)]
-                    elif user_id in d:
-                        rate = d[user_id]
-                    
-                    if "all" in d:
-                        all_rate = d["all"]
-
-    except ImportError:
-        print("[RPS DEBUG ERROR] Could not import settings.py", file=sys.stderr)
-    except Exception as e:
-        print(f"[RPS DEBUG ERROR] Exception reading settings.py: {e}", file=sys.stderr)
-
-    # 2. Secondary check: Query SQLite database directly
-    if rate is None or all_rate is None:
-        try:
-            import sqlite3
-            conn = sqlite3.connect("database.db")
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-
-            for table_name in ["settings", "rig_status", "user_rigs", "users"]:
-                try:
-                    if rate is None:
-                        cursor.execute(f"SELECT win_rate FROM {table_name} WHERE target = ? OR telegram_id = ?", (str(user_id), user_id))
-                        row = cursor.fetchone()
-                        if row and row[0] is not None:
-                            rate = row[0]
-
-                    if all_rate is None:
-                        cursor.execute(f"SELECT win_rate FROM {table_name} WHERE target = 'all' OR telegram_id = 'all'")
-                        row = cursor.fetchone()
-                        if row and row[0] is not None:
-                            all_rate = row[0]
-                except sqlite3.OperationalError:
-                    pass
-
-            conn.close()
-        except Exception as e:
-            print(f"[RPS DEBUG ERROR] Database lookup failed: {e}", file=sys.stderr)
-
-    # Apply precedence: User-specific rate > 'all' global rate
-    final_rate = rate if rate is not None else all_rate
-
-    if final_rate is not None:
-        try:
-            final_rate = float(final_rate)
-            # Normalize percentage (e.g., 100 -> 1.0, 50 -> 0.5)
-            if final_rate > 1.0:
-                final_rate = final_rate / 100.0
-
-            rate_type = "USER" if rate is not None else "ALL (Global Fallback)"
-            print(f"[RPS DEBUG] Applied {rate_type} setwin rate: {final_rate}", file=sys.stderr)
-            return final_rate
-        except (ValueError, TypeError) as e:
-            print(f"[RPS DEBUG ERROR] Failed to convert win rate ({final_rate}): {e}", file=sys.stderr)
-
-    print(f"[RPS DEBUG] No user or 'all' setwin found for user {user_id}. Defaulting to random.", file=sys.stderr)
-    return None
+        RPS_WIN_CHANCE = new_rate
+        bot.reply_to(message, f"✅ <b>RPS Win Chance updated to {RPS_WIN_CHANCE}%!</b>", parse_mode="HTML")
+        print(f"[RPS DEBUG] RPS_WIN_CHANCE manually updated to: {RPS_WIN_CHANCE}%", file=sys.stderr)
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid percentage number.")
 
 
 @bot.message_handler(commands=["rps"])
@@ -305,24 +239,23 @@ def callback_make_move(call: CallbackQuery):
     bot.answer_callback_query(call.id, f"You chose {EMOJI_MAP[move]}")
 
     if game["is_bot"]:
-        win_rate = fetch_configured_win_rate(game["host_id"])
+        # Probability check using local RPS_WIN_CHANCE
+        win_probability = RPS_WIN_CHANCE / 100.0
 
-        if win_rate is not None:
-            if win_rate <= 0.0:
-                game["opponent_choice"] = COUNTER_WIN[move]
-                print(f"[RPS DEBUG] FORCED LOSS (Rate {win_rate}): User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
-            elif win_rate >= 1.0:
-                game["opponent_choice"] = COUNTER_LOSE[move]
-                print(f"[RPS DEBUG] FORCED WIN (Rate {win_rate}): User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
-            else:
-                if random.random() < win_rate:
-                    game["opponent_choice"] = COUNTER_LOSE[move]
-                else:
-                    game["opponent_choice"] = COUNTER_WIN[move]
-                print(f"[RPS DEBUG] PROBABILITY RESULT ({win_rate}): Bot picked {game['opponent_choice']}", file=sys.stderr)
+        if win_probability <= 0.0:
+            game["opponent_choice"] = COUNTER_WIN[move]
+            print(f"[RPS DEBUG] FORCED LOSS (Rate {RPS_WIN_CHANCE}%): User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
+        elif win_probability >= 1.0:
+            game["opponent_choice"] = COUNTER_LOSE[move]
+            print(f"[RPS DEBUG] FORCED WIN (Rate {RPS_WIN_CHANCE}%): User chose {move}, Bot picked {game['opponent_choice']}", file=sys.stderr)
         else:
-            game["opponent_choice"] = random.choice(["rock", "scissors", "paper"])
-            print(f"[RPS DEBUG] RANDOM CHOICE: Bot picked {game['opponent_choice']}", file=sys.stderr)
+            if random.random() < win_probability:
+                # User Wins: Bot picks the choice that loses to user's move
+                game["opponent_choice"] = COUNTER_LOSE[move]
+            else:
+                # User Loses: Bot picks the choice that beats user's move
+                game["opponent_choice"] = COUNTER_WIN[move]
+            print(f"[RPS DEBUG] PROBABILITY RESULT (Chance: {RPS_WIN_CHANCE}%): Bot picked {game['opponent_choice']}", file=sys.stderr)
 
     if game["host_choice"] and game["opponent_choice"]:
         resolve_rps_game(call.message.chat.id, message_id)
