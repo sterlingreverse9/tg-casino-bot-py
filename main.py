@@ -1,6 +1,7 @@
 import asyncio
 import rps_game
 import handlers.ttt
+
 # Python 3.14 Pyrogram compatibility patch
 _orig_get_event_loop = asyncio.get_event_loop
 
@@ -26,7 +27,7 @@ from bot_instance import bot
 
 # Handlers
 import handlers.promote
-import handlers.pvp_game  # <-- Registered Unified PVP / Bot / Rig Handler
+import handlers.pvp_game  # Unified PVP / Bot Handler
 
 # Wallet & Dynamic Cards
 from wallet import get_balance, setup_secret_wallet_handlers
@@ -81,7 +82,7 @@ def cmd_show_balance(message):
 
 # Register Priority Handlers
 setup_secret_wallet_handlers(bot)
-setup_dice_handlers(bot)
+setup_dice_handlers(bot)  # Registered BEFORE command & basic text handlers
 
 # --- Import priority interaction handlers BEFORE handlers.basic ---
 import handlers.deposit
