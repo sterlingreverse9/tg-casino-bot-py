@@ -13,7 +13,7 @@ from wallet import adjust_balance, get_balance, record_bet
 
 MIN_BET = 5.0
 MAX_BET = 50.0
-WINS_CHANNEL = "@your_wins_channel"  # Replace with actual wins channel
+WINS_CHANNEL = "@thecassinowins"  # Replace with actual wins channel
 CASINO_GROUP = "thecassinogroup"
 
 ACTIVE_CHALLENGES = {}  # challenge_id -> dict data
