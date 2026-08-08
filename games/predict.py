@@ -72,7 +72,19 @@ def play_predict_number(
             f"<b>✅ YOU WON</b>"
         )
         bot.send_message(chat_id, result_text, parse_mode="HTML")
-        announce_win(username or str(telegram_id), payout, "Predict Number")
+
+        try:
+            announce_win(
+                bot=bot,
+                user_id=telegram_id,
+                display_name=user_ref,
+                game_name="Predict Number",
+                bet_amount=bet_amount,
+                payout=payout,
+            )
+        except Exception as e:
+            print(f"[PN LOG] announce_win error: {e}", flush=True)
+
     else:
         result_text = (
             f"<b>PN ♠️ | {user_ref}</b>\n"
