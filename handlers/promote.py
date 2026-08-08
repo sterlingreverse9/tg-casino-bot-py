@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from bot_instance import bot
 from promo_db import (
     add_account,
@@ -23,6 +24,7 @@ def is_authorized(user):
 
 def build_promote_dashboard():
     status = get_setting("promo_status", "stop")
+    default_bal = get_setting("default_balance", "100")
     status_str = "🟢 STARTED" if status == "start" else "🔴 STOPPED"
 
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -43,6 +45,10 @@ def build_promote_dashboard():
             "🔄 Set/Del Reconfirm Msg", callback_data="promo:reconfirm_menu"
         ),
         types.InlineKeyboardButton(
+            f"💰 Set Default Balance (Curr: ₹{default_bal})",
+            callback_data="promo:set_def_bal",
+        ),
+        types.InlineKeyboardButton(
             f"⚙️ Status: {status_str} (Toggle)",
             callback_data="promo:toggle_status",
         ),
@@ -50,14 +56,29 @@ def build_promote_dashboard():
     return markup, status_str
 
 
-# Persistent execution helper for pyrogram calls using a fresh event loop
-def run_async(coro):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+# Helper function to execute Pyrogram operations cleanly inside isolated event loop threads
+def run_in_dedicated_loop(coro):
+    result = None
+    exception = None
+
+    def worker():
+        nonlocal result, exception
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(coro)
+        except Exception as e:
+            exception = e
+        finally:
+            loop.close()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+
+    if exception:
+        raise exception
+    return result
 
 
 async def _async_send_otp(api_id, api_hash, phone):
@@ -66,10 +87,15 @@ async def _async_send_otp(api_id, api_hash, phone):
     )
     await cli.connect()
     sent_code = await cli.send_code(phone)
-    return cli, sent_code.phone_code_hash
+    await cli.disconnect()
+    return sent_code.phone_code_hash
 
 
-async def _async_sign_in(cli, phone, phone_code_hash, otp):
+async def _async_sign_in(api_id, api_hash, phone, phone_code_hash, otp):
+    cli = Client(
+        f"temp_{phone}", api_id=api_id, api_hash=api_hash, in_memory=True
+    )
+    await cli.connect()
     await cli.sign_in(phone, phone_code_hash, otp)
     session_str = await cli.export_session_string()
     await cli.disconnect()
@@ -90,7 +116,7 @@ def cmd_promote(message):
         message.chat.id,
         f"📣 <b>PROMOTION ENGINE DASHBOARD</b>\n\n"
         f"<b>Engine Status:</b> {status_str}\n"
-        f"Select an option below to manage slave accounts, target groups, and automated messaging.",
+        f"Select an option below to manage slave accounts, target groups, default balances, and automated messaging.",
         parse_mode="HTML",
         reply_markup=markup,
     )
@@ -208,6 +234,14 @@ def handle_promote_callbacks(call):
             call.id, "Reconfirm message cleared!", show_alert=True
         )
 
+    elif action == "set_def_bal":
+        USER_STATES[chat_id] = {"step": "SET_DEFAULT_BAL"}
+        bot.send_message(
+            chat_id,
+            "💰 Enter new default joining balance amount (e.g. <code>0</code> or <code>100</code>):",
+            parse_mode="HTML",
+        )
+
     elif action == "toggle_status":
         curr = get_setting("promo_status", "stop")
         new_status = "start" if curr == "stop" else "stop"
@@ -275,10 +309,9 @@ def process_promote_inputs(message):
         state["phone"] = phone
 
         try:
-            cli, phone_code_hash = run_async(
+            phone_code_hash = run_in_dedicated_loop(
                 _async_send_otp(state["api_id"], state["api_hash"], phone)
             )
-            state["client"] = cli
             state["phone_code_hash"] = phone_code_hash
             state["step"] = "OTP"
             bot.send_message(
@@ -292,11 +325,14 @@ def process_promote_inputs(message):
 
     elif step == "OTP":
         otp = message.text.strip()
-        cli = state.get("client")
         try:
-            session_str = run_async(
+            session_str = run_in_dedicated_loop(
                 _async_sign_in(
-                    cli, state["phone"], state["phone_code_hash"], otp
+                    state["api_id"],
+                    state["api_hash"],
+                    state["phone"],
+                    state["phone_code_hash"],
+                    otp,
                 )
             )
             add_account(
@@ -309,11 +345,6 @@ def process_promote_inputs(message):
             )
         except Exception as e:
             bot.send_message(chat_id, f"❌ Login failed: {e}")
-            if cli:
-                try:
-                    run_async(cli.disconnect())
-                except Exception:
-                    pass
         finally:
             if chat_id in USER_STATES:
                 del USER_STATES[chat_id]
@@ -326,6 +357,21 @@ def process_promote_inputs(message):
     elif step == "SET_RECONFIRM_MSG":
         set_setting("reconfirm_msg", message.text)
         bot.send_message(chat_id, "✅ Reconfirm message saved!")
+        del USER_STATES[chat_id]
+
+    elif step == "SET_DEFAULT_BAL":
+        if message.text.strip().isdigit():
+            val = message.text.strip()
+            set_setting("default_balance", val)
+            bot.send_message(
+                chat_id,
+                f"✅ Default joining balance updated to <b>₹{val}</b>!",
+                parse_mode="HTML",
+            )
+        else:
+            bot.send_message(
+                chat_id, "❌ Invalid number. Please send numbers only."
+            )
         del USER_STATES[chat_id]
 
     elif step == "ADD_GROUP":
