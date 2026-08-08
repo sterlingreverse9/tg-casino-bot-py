@@ -2,7 +2,9 @@ import html
 import time
 from wallet import get_balance, adjust_balance, record_bet
 from pvp_state import set_active_duel, get_active_duel, clear_active_duel
-from handlers.dice_duel_engine import process_user_roll
+
+# Correct import path targeting games/dice_duel.py
+from games.dice_duel import process_user_roll
 
 
 def setup_dice_handlers(bot):
@@ -23,13 +25,20 @@ def setup_dice_handlers(bot):
             if bet_amount <= 0:
                 raise ValueError
         except ValueError:
-            bot.reply_to(message, "⚠️ Please provide a valid positive bet amount (e.g. <code>/dice 10</code>).", parse_mode="HTML")
+            bot.reply_to(
+                message,
+                "⚠️ Please provide a valid positive bet amount (e.g. <code>/dice 10</code>).",
+                parse_mode="HTML",
+            )
             return
 
         # Check balance before starting
         current_bal = float(get_balance(telegram_id))
         if current_bal < bet_amount:
-            bot.reply_to(message, f"❌ Insufficient balance! Your current balance is ₹{current_bal:.2f}.")
+            bot.reply_to(
+                message,
+                f"❌ Insufficient balance! Your current balance is ₹{current_bal:.2f}.",
+            )
             return
 
         # Initialize Game Session
@@ -41,14 +50,18 @@ def setup_dice_handlers(bot):
             "bot_total": 0,
             "username": username,
             "first_name": first_name,
-            "emoji": "🎲"
+            "emoji": "🎲",
         }
 
         # Save session in pvp_state
         set_active_duel(telegram_id, game_data)
 
         safe_name = html.escape(first_name or "Player")
-        user_mention = f"@{username}" if username else f'<a href="tg://user?id={telegram_id}">{safe_name}</a>'
+        user_mention = (
+            f"@{username}"
+            if username
+            else f'<a href="tg://user?id={telegram_id}">{safe_name}</a>'
+        )
 
         bot.send_message(
             chat_id,
@@ -57,9 +70,12 @@ def setup_dice_handlers(bot):
             f"💵 <b>Bet:</b> ₹{bet_amount:.2f}\n"
             f"🔄 <b>Target Rounds:</b> Best of 1\n\n"
             f"👉 Send 🎲 to roll for <b>Round 1</b>!",
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
-        print(f"[DICE HANDLER] Game registered for {telegram_id} | Bet: ₹{bet_amount:.2f}", flush=True)
+        print(
+            f"[DICE HANDLER] Game registered for {telegram_id} | Bet: ₹{bet_amount:.2f}",
+            flush=True,
+        )
 
     # Listen explicitly for Telegram Native Dice Animations
     @bot.message_handler(content_types=["dice"])
@@ -72,18 +88,21 @@ def setup_dice_handlers(bot):
         if not game_data:
             return  # Ignore random dice rolls sent outside of active games
 
-        # Match emoji type (ensures game only listens to 🎲 emoji)
+        # Match emoji type
         if message.dice.emoji != game_data.get("emoji", "🎲"):
             return
 
         user_dice_val = message.dice.value
-        print(f"[DICE HANDLER] Captured roll {user_dice_val} from {user_id}", flush=True)
+        print(
+            f"[DICE HANDLER] Captured roll {user_dice_val} from {user_id}",
+            flush=True,
+        )
 
-        # Process the roll inside engine
+        # Process the roll inside games/dice_duel.py
         process_user_roll(
             bot=bot,
             chat_id=chat_id,
             telegram_id=user_id,
             game_data=game_data,
-            user_dice_val=user_dice_val
+            user_dice_val=user_dice_val,
         )
