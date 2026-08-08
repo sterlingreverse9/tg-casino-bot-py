@@ -3,7 +3,7 @@ import threading
 import html
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from bot_instance import bot
-from wallet import get_balance, adjust_balance, record_bet, update_wager
+from wallet import get_balance, adjust_balance, record_bet
 from games.tictactoe import TicTacToeGame
 
 MIN_BET = 5.0
@@ -32,83 +32,88 @@ def build_board_markup(game_id: str, board: list, is_finished: bool = False):
 
 @bot.message_handler(commands=["ttt", "tictactoe"])
 def handle_ttt_challenge(message: Message):
-    # Check DM vs Group Context
-    if message.chat.type == "private":
+    try:
+        # Check DM vs Group Context
+        if message.chat.type == "private":
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("Play in Group 🎰", url=f"https://t.me/{CASINO_GROUP}"))
+            bot.reply_to(message, "⚠️ Tic-Tac-Toe is a multiplayer game. Please use this command in our group chat!", reply_markup=markup)
+            return
+
+        args = message.text.split()[1:]
+        if len(args) < 2:
+            bot.reply_to(message, "⚠️ Usage: <code>/ttt &lt;amt&gt; &lt;@username&gt;</code> or <code>/ttt &lt;@username&gt; &lt;amt&gt;</code>", parse_mode="HTML")
+            return
+
+        # Parse command arguments flexible order
+        bet_amount = None
+        target_username = None
+
+        for arg in args:
+            clean_arg = arg.strip()
+            if clean_arg.startswith("@"):
+                target_username = clean_arg[1:]
+            else:
+                try:
+                    bet_amount = float(clean_arg)
+                except ValueError:
+                    pass
+
+        if not target_username or bet_amount is None:
+            bot.reply_to(message, "⚠️ Invalid command syntax. Example: <code>/ttt 10 @DarkAurora083</code>", parse_mode="HTML")
+            return
+
+        if bet_amount < MIN_BET or bet_amount > MAX_BET:
+            bot.reply_to(message, f"⚠️ Bet amount must be between ₹{MIN_BET:.2f} and ₹{MAX_BET:.2f}.")
+            return
+
+        p1_id = message.from_user.id
+        p1_name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+
+        if p1_name.lower().replace("@", "") == target_username.lower():
+            bot.reply_to(message, "❌ You cannot challenge yourself!")
+            return
+
+        # Validate Challenger Balance
+        p1_bal = get_balance(p1_id)
+        if p1_bal < bet_amount:
+            bot.reply_to(message, f"❌ Insufficient balance. Your balance: ₹{p1_bal:.2f}")
+            return
+
+        challenge_id = f"ch_{p1_id}_{int(time.time())}"
+        
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("Play in Group 🎰", url=f"https://t.me/{CASINO_GROUP}"))
-        bot.reply_to(message, "⚠️ Tic-Tac-Toe is a multiplayer game. Please use this command in our group chat!", reply_markup=markup)
-        return
+        markup.add(
+            InlineKeyboardButton("✅ Accept", callback_data=f"ttt_accept:{challenge_id}"),
+            InlineKeyboardButton("❌ Decline", callback_data=f"ttt_decline:{challenge_id}")
+        )
 
-    args = message.text.split()[1:]
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ Usage: <code>/ttt &lt;amt&gt; &lt;@username&gt;</code> or <code>/ttt &lt;@username&gt; &lt;amt&gt;</code>", parse_mode="HTML")
-        return
+        msg_text = (
+            f"⚔️ <b>TIC-TAC-TOE CHALLENGE</b>\n\n"
+            f"👤 <b>Challenger:</b> {p1_name}\n"
+            f"🎯 <b>Challenged:</b> @{target_username}\n"
+            f"💰 <b>Stake Amount:</b> ₹{bet_amount:.2f}\n\n"
+            f"⏱️ <i>You have 60 seconds to accept this challenge!</i>"
+        )
 
-    # Parse command arguments flexible order
-    bet_amount = None
-    target_username = None
+        sent_msg = bot.send_message(message.chat.id, msg_text, parse_mode="HTML", reply_markup=markup)
 
-    for arg in args:
-        clean_arg = arg.strip()
-        if clean_arg.startswith("@"):
-            target_username = clean_arg[1:]
-        else:
-            try:
-                bet_amount = float(clean_arg)
-            except ValueError:
-                pass
+        ACTIVE_CHALLENGES[challenge_id] = {
+            "p1_id": p1_id,
+            "p1_name": p1_name,
+            "p2_username": target_username.lower(),
+            "bet": bet_amount,
+            "msg_id": sent_msg.message_id,
+            "chat_id": message.chat.id,
+            "accepted": False
+        }
 
-    if not target_username or bet_amount is None:
-        bot.reply_to(message, "⚠️ Invalid command syntax. Example: <code>/ttt 10 @player2</code>", parse_mode="HTML")
-        return
+        # Set 60-second challenge timer
+        threading.Thread(target=_challenge_timeout, args=(challenge_id,), daemon=True).start()
 
-    if bet_amount < MIN_BET or bet_amount > MAX_BET:
-        bot.reply_to(message, f"⚠️ Bet amount must be between ₹{MIN_BET:.2f} and ₹{MAX_BET:.2f}.")
-        return
-
-    p1_id = message.from_user.id
-    p1_name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
-
-    if p1_name.lower().replace("@", "") == target_username.lower():
-        bot.reply_to(message, "❌ You cannot challenge yourself!")
-        return
-
-    # Validate Challenger Balance
-    p1_bal = get_balance(p1_id)
-    if p1_bal < bet_amount:
-        bot.reply_to(message, f"❌ Insufficient balance. Your balance: ₹{p1_bal:.2f}")
-        return
-
-    challenge_id = f"ch_{p1_id}_{int(time.time())}"
-    
-    markup = InlineKeyboardMarkup()
-    markup.add(
-        InlineKeyboardButton("✅ Accept", callback_data=f"ttt_accept:{challenge_id}"),
-        InlineKeyboardButton("❌ Decline", callback_data=f"ttt_decline:{challenge_id}")
-    )
-
-    msg_text = (
-        f"⚔️ <b>TIC-TAC-TOE CHALLENGE</b>\n\n"
-        f"👤 <b>Challenger:</b> {p1_name}\n"
-        f"🎯 <b>Challenged:</b> @{target_username}\n"
-        f"💰 <b>Stake Amount:</b> ₹{bet_amount:.2f}\n\n"
-        f"⏱️ <i>You have 60 seconds to accept this challenge!</i>"
-    )
-
-    sent_msg = bot.send_message(message.chat.id, msg_text, parse_mode="HTML", reply_markup=markup)
-
-    ACTIVE_CHALLENGES[challenge_id] = {
-        "p1_id": p1_id,
-        "p1_name": p1_name,
-        "p2_username": target_username.lower(),
-        "bet": bet_amount,
-        "msg_id": sent_msg.message_id,
-        "chat_id": message.chat.id,
-        "accepted": False
-    }
-
-    # Set 60-second challenge timer
-    threading.Thread(target=_challenge_timeout, args=(challenge_id,), daemon=True).start()
+    except Exception as e:
+        print(f"[TTT Command Error]: {e}")
+        bot.reply_to(message, "⚠️ Something went wrong while starting the challenge.")
 
 
 def _challenge_timeout(challenge_id: str):
@@ -152,18 +157,16 @@ def handle_challenge_callback(call: CallbackQuery):
 
     # Balance Verification for both players
     if get_balance(data["p1_id"]) < bet:
-        bot.answer_callback_query(call.id, f"Challenger no longer has sufficient funds!", show_alert=True)
+        bot.answer_callback_query(call.id, "Challenger no longer has sufficient funds!", show_alert=True)
         return
 
     if get_balance(p2_id) < bet:
         bot.answer_callback_query(call.id, f"You don't have enough balance (₹{bet:.2f}) to accept!", show_alert=True)
         return
 
-    # Deduct bets and update wagers
+    # Deduct bets from both players
     adjust_balance(data["p1_id"], -bet)
     adjust_balance(p2_id, -bet)
-    update_wager(data["p1_id"], bet)
-    update_wager(p2_id, bet)
 
     data["accepted"] = True
     ACTIVE_CHALLENGES.pop(challenge_id, None)
