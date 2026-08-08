@@ -50,17 +50,39 @@ def play_dice_roll(
 
     choice = choice_map[raw_choice]
 
+    # Check Balances and Limits
     balance = get_balance(telegram_id)
     min_bet = get_min_bet()
     max_bet = get_max_bet(get_house_balance())
 
-    if bet_amount < min_bet or bet_amount > max_bet or bet_amount > balance:
+    if bet_amount < min_bet:
+        bot.send_message(
+            chat_id, f"⚠️ Minimum bet amount is ₹{min_bet:.2f}."
+        )
         print(
-            f"[DR LOG] Rejected bet ₹{bet_amount:.2f} for {user_label} (Bal: ₹{balance:.2f})",
+            f"[DR LOG] Rejected bet ₹{bet_amount:.2f} (Below Min ₹{min_bet:.2f}) for {user_label}",
             flush=True,
         )
+        return
+
+    if bet_amount > max_bet:
         bot.send_message(
-            chat_id, "❌ Invalid bet amount or insufficient balance."
+            chat_id, f"⚠️ Maximum bet amount is ₹{max_bet:.2f}."
+        )
+        print(
+            f"[DR LOG] Rejected bet ₹{bet_amount:.2f} (Above Max ₹{max_bet:.2f}) for {user_label}",
+            flush=True,
+        )
+        return
+
+    if bet_amount > balance:
+        bot.send_message(
+            chat_id,
+            f"❌ Insufficient balance! Your balance: ₹{balance:.2f}",
+        )
+        print(
+            f"[DR LOG] Rejected bet ₹{bet_amount:.2f} (Insufficient Bal ₹{balance:.2f}) for {user_label}",
+            flush=True,
         )
         return
 
@@ -107,6 +129,7 @@ def play_dice_roll(
     if won:
         adjust_balance(telegram_id, payout)
 
+    # Wager & Bet Recording
     record_bet(
         telegram_id=telegram_id,
         game="dice_roll",
@@ -135,6 +158,20 @@ def play_dice_roll(
             f"🎉 <b>You Won ₹{payout:.2f}!</b>\n"
             f"💰 <b>Balance:</b> ₹{new_balance:.2f}"
         )
+
+        # Trigger global win announcement
+        try:
+            announce_win(
+                bot=bot,
+                user_id=telegram_id,
+                display_name=user_label,
+                game_name="Dice Roll",
+                bet_amount=bet_amount,
+                payout=payout,
+            )
+        except Exception as e:
+            print(f"[DR LOG] announce_win error: {e}", flush=True)
+
     else:
         msg = (
             f"⚡ <b>Dice Roll (DR) • ₹{bet_amount:.2f}</b>\n\n"
