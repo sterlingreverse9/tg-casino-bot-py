@@ -57,10 +57,15 @@ async def _async_send_otp(api_id, api_hash, phone):
     )
     await cli.connect()
     sent_code = await cli.send_code(phone)
-    return cli, sent_code.phone_code_hash
+    await cli.disconnect()
+    return sent_code.phone_code_hash
 
 
-async def _async_sign_in(cli, phone, phone_code_hash, otp):
+async def _async_sign_in(api_id, api_hash, phone, phone_code_hash, otp):
+    cli = Client(
+        f"temp_{phone}", api_id=api_id, api_hash=api_hash, in_memory=True
+    )
+    await cli.connect()
     await cli.sign_in(phone, phone_code_hash, otp)
     session_str = await cli.export_session_string()
     await cli.disconnect()
@@ -266,11 +271,9 @@ def process_promote_inputs(message):
         state["phone"] = phone
 
         try:
-            # Fix: Run async OTP call explicitly in event loop for WorkerThread
-            cli, phone_code_hash = asyncio.run(
+            phone_code_hash = asyncio.run(
                 _async_send_otp(state["api_id"], state["api_hash"], phone)
             )
-            state["client"] = cli
             state["phone_code_hash"] = phone_code_hash
             state["step"] = "OTP"
             bot.send_message(
@@ -285,11 +288,13 @@ def process_promote_inputs(message):
     elif step == "OTP":
         otp = message.text.strip()
         try:
-            temp_cli = state["client"]
-            # Fix: Run async sign in explicitly in event loop
             session_str = asyncio.run(
                 _async_sign_in(
-                    temp_cli, state["phone"], state["phone_code_hash"], otp
+                    state["api_id"],
+                    state["api_hash"],
+                    state["phone"],
+                    state["phone_code_hash"],
+                    otp,
                 )
             )
             add_account(
