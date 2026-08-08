@@ -50,8 +50,8 @@ def build_promote_dashboard():
     return markup, status_str
 
 
-# Helper function running inside a dedicated thread loop to manage persistent Pyrogram connections
-def run_in_loop(coro):
+# Persistent execution helper for pyrogram calls using a fresh event loop
+def run_async(coro):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -275,7 +275,7 @@ def process_promote_inputs(message):
         state["phone"] = phone
 
         try:
-            cli, phone_code_hash = run_in_loop(
+            cli, phone_code_hash = run_async(
                 _async_send_otp(state["api_id"], state["api_hash"], phone)
             )
             state["client"] = cli
@@ -292,9 +292,9 @@ def process_promote_inputs(message):
 
     elif step == "OTP":
         otp = message.text.strip()
+        cli = state.get("client")
         try:
-            cli = state["client"]
-            session_str = run_in_loop(
+            session_str = run_async(
                 _async_sign_in(
                     cli, state["phone"], state["phone_code_hash"], otp
                 )
@@ -309,8 +309,14 @@ def process_promote_inputs(message):
             )
         except Exception as e:
             bot.send_message(chat_id, f"❌ Login failed: {e}")
+            if cli:
+                try:
+                    run_async(cli.disconnect())
+                except Exception:
+                    pass
         finally:
-            del USER_STATES[chat_id]
+            if chat_id in USER_STATES:
+                del USER_STATES[chat_id]
 
     elif step == "SET_PROMOTE_MSG":
         set_setting("promote_msg", message.text)
