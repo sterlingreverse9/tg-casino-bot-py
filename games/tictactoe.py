@@ -25,9 +25,12 @@ class TicTacToeGame:
         # 3x3 board stored as flat list of 9 elements
         self.board = ["⬜"] * 9
 
-        # Challenged player (player2) always gets X and moves first
-        self.x_player = (player2_id, player2_name)
-        self.o_player = (player1_id, player1_name)
+        # Randomly assign who gets 'X' (First Move) and 'O' (Second Move)
+        players = [(player1_id, player1_name), (player2_id, player2_name)]
+        random.shuffle(players)
+
+        self.x_player = players[0]  # Randomly chosen to go first (X)
+        self.o_player = players[1]  # Randomly chosen to go second (O)
 
         self.turn = "X"  # X always moves first
         self.is_finished = False
