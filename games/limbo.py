@@ -1,6 +1,7 @@
 import random
 from wallet import get_balance, adjust_balance, record_bet, get_house_balance
 from settings import get_min_bet, get_max_bet
+from helpers import announce_win
 
 MIN_MULTIPLIER = 1.01
 MAX_MULTIPLIER = 1000
@@ -75,6 +76,22 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
         result="win" if won else "loss",
         meta={"target": target_multiplier, "result": result},
     )
+
+    user_label = user_name or f"ID: {telegram_id}"
+
+    # Announce win to public group/channel if configured
+    if won:
+        try:
+            announce_win(
+                bot=bot,
+                user_id=telegram_id,
+                display_name=user_label,
+                game_name="Limbo",
+                bet_amount=bet_amount,
+                payout=payout,
+            )
+        except Exception as e:
+            print(f"[LIMBO WIN ANNOUNCE ERROR] {e}", flush=True)
 
     # 20% Chance on Win to display a high 10x-50x multiplier instead of real result
     display_result = result
