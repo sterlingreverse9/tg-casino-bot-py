@@ -1,8 +1,7 @@
 import asyncio
 
-# Python 3.14 Pyrogram compatibility patch
+# Python 3.14 Pyrogram/Telebot compatibility patch
 _orig_get_event_loop = asyncio.get_event_loop
-
 
 def _get_event_loop():
     try:
@@ -12,21 +11,19 @@ def _get_event_loop():
         asyncio.set_event_loop(loop)
         return loop
 
-
 asyncio.get_event_loop = _get_event_loop
 
-# --- ALL YOUR EXISTING IMPORTS BELOW THIS LINE ---
+# --- CORE SYSTEM IMPORTS ---
 import html
 import traceback
 
 # Core bot configuration & instance
-from config import CASINO_NAME
-from bot_instance import bot
+try:
+    from config import CASINO_NAME
+except ImportError:
+    CASINO_NAME = "THE CASINO"
 
-# Keep RPS and TicTacToe
-import rps_game
-import handlers.ttt
-import handlers.promote
+from bot_instance import bot
 
 # Wallet & Dynamic Cards
 from wallet import get_balance, setup_secret_wallet_handlers
@@ -60,7 +57,7 @@ def cmd_show_balance(message):
             username=user.username,
             display_name=user.first_name or "Player",
             balance=user_balance,
-            casino_name=CASINO_NAME if 'CASINO_NAME' in globals() else "THE CASINO",
+            casino_name=CASINO_NAME,
             avatar_url=avatar_url
         )
 
@@ -78,13 +75,18 @@ def cmd_show_balance(message):
         bot.reply_to(message, f"❌ Error loading balance card: {str(e)}")
 
 
-# Register Priority Handlers
+# Register Secret/Priority Wallet Handlers
 setup_secret_wallet_handlers(bot)
 
-# --- Import priority interaction handlers BEFORE handlers.basic ---
+
+# --- LOAD GAME MODULES & COMMAND HANDLERS ---
+import rps_game
+import handlers.ttt
+import handlers.promote
+
 import handlers.deposit
 import handlers.withdraw
-import handlers.games
+import handlers.games      # Handles /dr, /limbo, /cf, etc.
 import handlers.codes
 import handlers.admin
 import handlers.rain
@@ -94,11 +96,11 @@ import handlers.referral
 import handlers.tracking
 import handlers.broadcast
 
-# Catch-all text handlers should be imported LAST
+# ALL catch-all / default text message handlers MUST BE LOADED LAST
 import handlers.basic
 
 
-# --- Restrict /checkbal command strictly to @mrpuppyx ---
+# --- ADMIN BALANCE CHECK (/checkbal) ---
 AUTHORIZED_USERNAME = "mrpuppyx"
 
 @bot.message_handler(commands=["checkbal"])
@@ -164,5 +166,11 @@ def check_balance_cmd(message):
 
 
 if __name__ == "__main__":
+    # Clear any leftover webhooks from other frameworks
+    try:
+        bot.remove_webhook()
+    except Exception:
+        pass
+
     print(f"🚀 {CASINO_NAME} bot is running...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)
