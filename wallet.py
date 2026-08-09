@@ -54,7 +54,7 @@ def init_db():
         )
     """)
     cursor.execute("INSERT OR IGNORE INTO house (id, balance) VALUES (1, 100000.0)")
-    
+
     # Auto-migrate existing database to ensure missing columns exist
     columns_to_add = [
         ("rakeback_claimed", "REAL DEFAULT 0.0"),
@@ -172,6 +172,10 @@ def reduce_wager_requirement(telegram_id: int, bet_amount: float):
         pass
     conn.close()
 
+# Alias function to satisfy imports expecting `update_wager`
+def update_wager(telegram_id: int, bet_amount: float):
+    reduce_wager_requirement(telegram_id, bet_amount)
+
 def record_bet(telegram_id: int, game: str, bet_amount: float, payout: float, result: str, meta: dict = None):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -232,10 +236,10 @@ def handle_rakeback(message: Message):
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT SUM(bet_amount) as total_bets, SUM(payout) as total_payouts FROM bets WHERE telegram_id = ?", (user.id,))
     row = cursor.fetchone()
-    
+
     cursor.execute("SELECT COALESCE(rakeback_claimed, 0) as claimed FROM users WHERE telegram_id = ?", (user.id,))
     user_row = cursor.fetchone()
     conn.close()
@@ -247,7 +251,7 @@ def handle_rakeback(message: Message):
     rate = check_user_boost(user.id, user)
     total_rakeback_earned = total_losses * rate
     already_claimed = float(user_row["claimed"]) if user_row and user_row["claimed"] else 0.0
-    
+
     claimable = max(0.0, round(total_rakeback_earned - already_claimed, 2))
 
     text = (
