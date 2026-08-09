@@ -1,11 +1,17 @@
 import random
 import time
 from bot_instance import bot
-from wallet import get_balance, adjust_balance, record_bet, get_house_balance
-from game_math import payout_for
+from wallet import get_balance, adjust_balance, record_bet, update_wager
 from settings import get_min_bet, get_max_bet
 from helpers import announce_win
 from games.predict import play_predict_number
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# --- DR CONSTANTS & MULTIPLIERS ---
+DICE_MIN_BET = 5.0
+DICE_MAX_BET = 50.0
+MULTIPLIER_CHOICE = 1.8  # high / low / odd / even
+MULTIPLIER_EXACT = 5.0   # exact numbers 1-6
 
 # --- CONSTANTS & BUCKETS FOR LIMBO ---
 MIN_MULTIPLIER = 1.01
@@ -49,50 +55,102 @@ def roll_result() -> float:
 
 
 # --- DICE ROLL LOGIC ---
-def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: str, display_name: str = None):
-    choice = str(choice).lower().strip()
+def parse_choice(choice_str: str):
+    s = str(choice_str).strip().lower()
+    if s in ["high", "h", "high (4-6)"]:
+        return "high"
+    if s in ["low", "l", "low (1-3)"]:
+        return "low"
+    if s in ["odd", "o"]:
+        return "odd"
+    if s in ["even", "e"]:
+        return "even"
+    if s in ["1", "2", "3", "4", "5", "6"]:
+        return int(s)
+    return None
 
-    valid_choices = {"high", "low", "even", "odd", "1", "2", "3", "4", "5", "6"}
-    if choice not in valid_choices:
-        bot.send_message(chat_id, "⚠️ Invalid choice. Use high, low, even, odd, or 1-6.")
+
+def get_dice_keyboard(bet_amount: float):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("High (4-6) [1.8x]", callback_data=f"dr_play:{bet_amount}:high"),
+        InlineKeyboardButton("Low (1-3) [1.8x]", callback_data=f"dr_play:{bet_amount}:low"),
+        InlineKeyboardButton("Odd [1.8x]", callback_data=f"dr_play:{bet_amount}:odd"),
+        InlineKeyboardButton("Even [1.8x]", callback_data=f"dr_play:{bet_amount}:even"),
+    )
+    num_btns = [
+        InlineKeyboardButton(f"🎲 {n} [5x]", callback_data=f"dr_play:{bet_amount}:{n}")
+        for n in range(1, 7)
+    ]
+    markup.add(*num_btns[:3])
+    markup.add(*num_btns[3:])
+    return markup
+
+
+def evaluate_dice_win(roll: int, choice) -> bool:
+    if choice == "high":
+        return roll >= 4
+    if choice == "low":
+        return roll <= 3
+    if choice == "odd":
+        return roll % 2 != 0
+    if choice == "even":
+        return roll % 2 == 0
+    if isinstance(choice, int):
+        return roll == choice
+    return False
+
+
+def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: str = None, display_name: str = None):
+    # 1. Bet Limits
+    if bet_amount < DICE_MIN_BET:
+        bot.send_message(chat_id, f"⚠️ Minimum bet is ₹{DICE_MIN_BET:.2f}", parse_mode="HTML")
+        return
+    if bet_amount > DICE_MAX_BET:
+        bot.send_message(chat_id, f"⚠️ Maximum bet is ₹{DICE_MAX_BET:.2f}", parse_mode="HTML")
         return
 
     balance = get_balance(telegram_id)
-    min_bet = get_min_bet()
-    max_bet = get_max_bet(get_house_balance())
-
-    if bet_amount < min_bet or bet_amount > max_bet or bet_amount > balance:
-        bot.send_message(chat_id, "❌ Invalid bet amount or insufficient balance.")
+    if bet_amount > balance:
+        bot.send_message(chat_id, f"❌ Insufficient balance! Your balance: ₹{balance:.2f}")
         return
 
-    adjust_balance(telegram_id, -bet_amount)
+    # 2. Open Panel if Choice Not Passed
+    if choice is None:
+        text = (
+            f"🎲 <b>Dice Roll Game</b>\n\n"
+            f"💰 <b>Selected Bet:</b> ₹{bet_amount:.2f}\n"
+            f"Select your prediction below:"
+        )
+        bot.send_message(chat_id, text, reply_markup=get_dice_keyboard(bet_amount), parse_mode="HTML")
+        return
 
+    parsed_choice = parse_choice(choice)
+    if parsed_choice is None:
+        bot.send_message(
+            chat_id,
+            "⚠️ Invalid choice. Use <code>high</code>, <code>low</code>, <code>even</code>, <code>odd</code>, or <code>1-6</code>.",
+            parse_mode="HTML"
+        )
+        return
+
+    # 3. Deduct Balance & Update Wager
+    adjust_balance(telegram_id, -bet_amount)
+    try:
+        update_wager(telegram_id, bet_amount)
+    except Exception as e:
+        print(f"[DICE WAGER ERROR] {e}")
+
+    # 4. Roll Dice
     dice_msg = bot.send_dice(chat_id, emoji="🎲")
     time.sleep(3)
     roll = int(dice_msg.dice.value)
 
-    won = False
-    win_chance = 0.5
-    label = choice.upper()
+    # 5. Evaluate Win & Multipliers
+    won = evaluate_dice_win(roll, parsed_choice)
+    multiplier = MULTIPLIER_EXACT if isinstance(parsed_choice, int) else MULTIPLIER_CHOICE
+    payout = round(bet_amount * multiplier, 2) if won else 0.0
 
-    if choice == "high":
-        won = (roll in [4, 5, 6])
-        label = "High (4-6)"
-    elif choice == "low":
-        won = (roll in [1, 2, 3])
-        label = "Low (1-3)"
-    elif choice == "even":
-        won = (roll % 2 == 0)
-        label = "Even"
-    elif choice == "odd":
-        won = (roll % 2 != 0)
-        label = "Odd"
-    elif choice in {"1", "2", "3", "4", "5", "6"}:
-        won = (roll == int(choice))
-        win_chance = 1 / 6
-        label = f"Number {choice}"
-
-    payout = payout_for(bet_amount, win_chance) if won else 0.0
     if won:
         adjust_balance(telegram_id, payout)
 
@@ -102,7 +160,7 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
         bet_amount=bet_amount,
         payout=payout,
         result="win" if won else "loss",
-        meta={"choice": choice, "roll": roll},
+        meta={"choice": str(parsed_choice), "roll": roll},
     )
 
     new_balance = get_balance(telegram_id)
@@ -112,9 +170,9 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
         msg = (
             f"⚡ <b>Dice Roll (DR) • ₹{bet_amount:.2f}</b>\n\n"
             f"👤 <b>Player:</b> {user_label} 🎲\n"
-            f"🎯 <b>Choice:</b> {label}\n"
+            f"🎯 <b>Choice:</b> {str(parsed_choice).upper()}\n"
             f"🎲 <b>Outcome:</b> {roll}\n\n"
-            f"🎉 <b>You Won ₹{payout:.2f}!</b>\n"
+            f"🎉 <b>You Won ₹{payout:.2f}!</b> ({multiplier}x)\n"
             f"💰 <b>Balance:</b> ₹{new_balance:.2f}"
         )
         try:
@@ -132,7 +190,7 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
         msg = (
             f"⚡ <b>Dice Roll (DR) • ₹{bet_amount:.2f}</b>\n\n"
             f"👤 <b>Player:</b> {user_label} 🎲\n"
-            f"🎯 <b>Choice:</b> {label}\n"
+            f"🎯 <b>Choice:</b> {str(parsed_choice).upper()}\n"
             f"🎲 <b>Outcome:</b> {roll}\n\n"
             f"❌ <b>You Lost ₹{bet_amount:.2f}</b>\n"
             f"💰 <b>Balance:</b> ₹{new_balance:.2f}"
@@ -145,7 +203,7 @@ def play_dice_roll(bot, chat_id, telegram_id: int, bet_amount: float, choice: st
 def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multiplier: float, user_name: str = None):
     balance = get_balance(telegram_id)
     min_bet = get_min_bet()
-    max_bet = get_max_bet(get_house_balance())
+    max_bet = get_max_bet()
 
     if bet_amount < min_bet:
         bot.send_message(chat_id, f"⚠️ Minimum bet is ₹{min_bet:.2f}")
@@ -198,10 +256,12 @@ def play_limbo(bot, chat_id, telegram_id: int, bet_amount: float, target_multipl
 def cmd_dice_roll(message):
     args = message.text.split()[1:]
 
-    if len(args) < 2:
+    if len(args) < 1:
         bot.reply_to(
             message,
-            "⚠️ <b>Usage:</b> <code>/dr &lt;bet&gt; &lt;choice&gt;</code>\n"
+            "⚠️ <b>Usage:</b>\n"
+            "• <code>/dr &lt;amt&gt;</code> — Open inline prediction panel\n"
+            "• <code>/dr &lt;amt&gt; &lt;choice&gt;</code> — Bet directly\n\n"
             "<b>Example:</b> <code>/dr 10 high</code> or <code>/dr 10 5</code>",
             parse_mode="HTML"
         )
@@ -213,13 +273,40 @@ def cmd_dice_roll(message):
         bot.reply_to(message, "❌ Invalid bet amount!", parse_mode="HTML")
         return
 
+    choice = args[1] if len(args) >= 2 else None
+
     play_dice_roll(
         bot=bot,
         chat_id=message.chat.id,
         telegram_id=message.from_user.id,
         bet_amount=bet_amount,
-        choice=args[1],
+        choice=choice,
         display_name=message.from_user.first_name
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("dr_play:"))
+def cb_dice_play(call):
+    try:
+        _, bet_str, choice = call.data.split(":")
+        bet_amount = float(bet_str)
+    except Exception:
+        bot.answer_callback_query(call.id, "Invalid data!", show_alert=True)
+        return
+
+    bot.answer_callback_query(call.id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+
+    play_dice_roll(
+        bot=bot,
+        chat_id=call.message.chat.id,
+        telegram_id=call.from_user.id,
+        bet_amount=bet_amount,
+        choice=choice,
+        display_name=call.from_user.first_name,
     )
 
 
