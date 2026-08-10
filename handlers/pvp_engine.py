@@ -236,11 +236,18 @@ def handle_pvp_dice_roll(message):
 
     chat_id = message.chat.id
 
-    # 1. ANTI-CHEAT: Check for Forwarded Messages
-    if message.forward_date or message.forward_from or message.forward_from_chat:
+    # 1. ANTI-CHEAT: Multi-Layer Check for Forwarded / Copied Rolls
+    is_forwarded = (
+        getattr(message, 'forward_date', None) is not None
+        or getattr(message, 'forward_from', None) is not None
+        or getattr(message, 'forward_from_chat', None) is not None
+        or getattr(message, 'forward_origin', None) is not None
+    )
+
+    if is_forwarded:
         cheater_name = message.from_user.first_name or "Player"
         winner_id = game.p2_id if user_id == game.p1_id else game.p1_id
-        winner_name = game.p2_name if user_id == game.p1_id else game.p1_name
+        winner_name = game.p2_name if user_id == game.p1_id else game.p2_name
 
         payout = round(game.bet * PAYOUT_MULT, 2)
 
