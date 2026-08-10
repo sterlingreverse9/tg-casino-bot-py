@@ -9,7 +9,6 @@ MIN_BET = 5.0
 MAX_BET = 50.0
 PAYOUT_MULT = 1.8
 
-# Active PvP match state tracking
 ACTIVE_MATCHES = {}  # key: match_id
 USER_MATCHES = {}    # key: user_id -> match_id
 
@@ -83,7 +82,6 @@ def create_pvp_challenge(bot_inst, message, game_type, args):
         bot_inst.reply_to(message, "⚠️ You are already in an active game or pending challenge!")
         return
 
-    # Parse Arguments
     bet = MIN_BET
     rounds = 1
     target_user = None
@@ -109,11 +107,9 @@ def create_pvp_challenge(bot_inst, message, game_type, args):
         bot_inst.reply_to(message, f"❌ Insufficient balance! Your balance: ₹{balance:.2f}")
         return
 
-    # Deduct bet for challenger
     adjust_balance(user.id, -bet)
     update_wager(user.id, bet)
 
-    # Mode A: Playing vs Bot
     if not target_user:
         game = PvPGame(game_type, user.id, user.first_name, 0, "The Casino Bot", bet, rounds, is_bot=True)
         ACTIVE_MATCHES[game.match_id] = game
@@ -123,13 +119,12 @@ def create_pvp_challenge(bot_inst, message, game_type, args):
             message,
             f"{game.emoji} <b>{game_type.upper()} VS BOT Started!</b>\n"
             f"💰 <b>Bet:</b> ₹{bet:.2f} | 🎯 <b>Rounds:</b> {rounds}\n\n"
-            f" Send {game.emoji} to roll your turn!",
+            f"Send {game.emoji} to roll your turn!",
             parse_mode="HTML"
         )
         reset_turn_timer(game, chat_id)
         return
 
-    # Mode B: Challenging another player
     markup = InlineKeyboardMarkup()
     markup.add(
         InlineKeyboardButton("✅ Accept Challenge", callback_data=f"pvp_acc:{user.id}:{bet}:{rounds}:{game_type}"),
@@ -159,7 +154,6 @@ def reset_turn_timer(game, chat_id):
         game.turn_timer.cancel()
 
     def turn_timeout():
-        # Current turn user forfeit
         winner_id = game.p2_id if game.current_turn == game.p1_id else game.p1_id
         winner_name = game.p2_name if game.current_turn == game.p1_id else game.p1_name
         loser_name = game.p1_name if game.current_turn == game.p1_id else game.p2_name
@@ -171,7 +165,7 @@ def reset_turn_timer(game, chat_id):
         bot.send_message(
             chat_id,
             f"⏳ <b>Time's up!</b> {loser_name} failed to roll within 60s.\n"
-            f"🏆 <b>{winner_name}</b> wins ₹{payout:.2f} by forfeit!",
+            f"🏆 <b>{winner_name}</b> wins by forfeit!",
             parse_mode="HTML"
         )
         cleanup_match(game.match_id)
@@ -205,7 +199,6 @@ def cb_accept_pvp(call):
         bot.answer_callback_query(call.id, "Insufficient balance to accept!", show_alert=True)
         return
 
-    # Deduct target balance
     adjust_balance(target.id, -bet)
     update_wager(target.id, bet)
 
@@ -237,10 +230,15 @@ def handle_pvp_dice_roll(message):
         return
 
     game = ACTIVE_MATCHES[match_id]
+    
+    # Strict emoji type check
+    if message.dice.emoji != game.emoji:
+        bot.reply_to(message, f"⚠️ Invalid roll! Please send {game.emoji} for this game.")
+        return
+
     if not game.accepted or game.current_turn != user_id:
         return
 
-    # Process Roll
     val = message.dice.value
     chat_id = message.chat.id
 
@@ -274,14 +272,12 @@ def process_round_end(game, chat_id):
         reset_turn_timer(game, chat_id)
         return
 
-    # Check Winner
     payout = round(game.bet * PAYOUT_MULT, 2)
     if game.p1_score > game.p2_score:
         winner_id, winner_name = game.p1_id, game.p1_name
     elif game.p2_score > game.p1_score:
         winner_id, winner_name = game.p2_id, game.p2_name
     else:
-        # Tie-breaker
         game.total_rounds += 1
         game.current_turn = game.p1_id
         bot.send_message(
@@ -292,7 +288,7 @@ def process_round_end(game, chat_id):
         reset_turn_timer(game, chat_id)
         return
 
-    # Award Winner
+    # Handle Win / Loss Display
     if winner_id != 0:
         adjust_balance(winner_id, payout)
         record_bet(winner_id, game.game_type, game.bet, payout, "win")
@@ -300,13 +296,17 @@ def process_round_end(game, chat_id):
             announce_win(bot, winner_id, winner_name, f"{game.game_type.title()} PvP", game.bet, payout)
         except Exception:
             pass
+        payout_msg = f"\n🎉 <b>Winner: {winner_name}</b> (+₹{payout:.2f})"
+    else:
+        record_bet(game.p1_id, game.game_type, game.bet, 0, "loss")
+        payout_msg = f"\n❌ <b>Winner: {winner_name}</b> (You Lost ₹{game.bet:.2f})"
 
     bot.send_message(
         chat_id,
         f"🏆 <b>GAME OVER!</b>\n\n"
         f"👤 {game.p1_name}: <code>{game.p1_score}</code>\n"
-        f"👤 {game.p2_name}: <code>{game.p2_score}</code>\n\n"
-        f"🎉 <b>Winner: {winner_name}</b> (+₹{payout:.2f})",
+        f"👤 {game.p2_name}: <code>{game.p2_score}</code>"
+        f"{payout_msg}",
         parse_mode="HTML"
     )
     cleanup_match(game.match_id)
