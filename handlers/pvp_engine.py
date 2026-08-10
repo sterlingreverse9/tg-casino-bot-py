@@ -6,7 +6,7 @@ from helpers import announce_win
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 MIN_BET = 5.0
-MAX_BET = 300.0
+MAX_BET = 50.0
 PAYOUT_MULT = 1.8
 
 ACTIVE_MATCHES = {}  # key: match_id
@@ -230,17 +230,50 @@ def handle_pvp_dice_roll(message):
         return
 
     game = ACTIVE_MATCHES[match_id]
-    
-    # Strict emoji type check
-    if message.dice.emoji != game.emoji:
-        bot.reply_to(message, f"⚠️ Invalid roll! Please send {game.emoji} for this game.")
-        return
 
     if not game.accepted or game.current_turn != user_id:
         return
 
-    val = message.dice.value
     chat_id = message.chat.id
+
+    # 1. ANTI-CHEAT: Check for Forwarded Messages
+    if message.forward_date or message.forward_from or message.forward_from_chat:
+        cheater_name = message.from_user.first_name or "Player"
+        winner_id = game.p2_id if user_id == game.p1_id else game.p1_id
+        winner_name = game.p2_name if user_id == game.p1_id else game.p1_name
+
+        payout = round(game.bet * PAYOUT_MULT, 2)
+
+        if winner_id != 0:
+            adjust_balance(winner_id, payout)
+            record_bet(winner_id, game.game_type, game.bet, payout, "win")
+            try:
+                announce_win(bot, winner_id, winner_name, f"{game.game_type.title()} PvP (Anti-Cheat)", game.bet, payout)
+            except Exception:
+                pass
+            win_msg = f"🏆 <b>{winner_name}</b> wins ₹{payout:.2f} due to disqualification!"
+        else:
+            record_bet(user_id, game.game_type, game.bet, 0, "loss")
+            win_msg = f"❌ <b>Match Forfeited!</b> You lost your bet of ₹{game.bet:.2f}."
+
+        bot.send_message(
+            chat_id,
+            f"🚫 <b>CHEATING DETECTED!</b>\n\n"
+            f"⚠️ <b>{cheater_name}</b> used a <b>forwarded dice roll</b>!\n"
+            f"🚨 <b>Punishment:</b> Disqualified & bet forfeited.\n\n"
+            f"{win_msg}",
+            parse_mode="HTML"
+        )
+        cleanup_match(game.match_id)
+        return
+
+    # 2. Strict Emoji Match Check
+    if message.dice.emoji != game.emoji:
+        bot.reply_to(message, f"⚠️ Invalid roll! Please send a real {game.emoji} for this game.")
+        return
+
+    # 3. Process Valid Turn
+    val = message.dice.value
 
     if user_id == game.p1_id:
         game.p1_score += val
@@ -288,7 +321,6 @@ def process_round_end(game, chat_id):
         reset_turn_timer(game, chat_id)
         return
 
-    # Handle Win / Loss Display
     if winner_id != 0:
         adjust_balance(winner_id, payout)
         record_bet(winner_id, game.game_type, game.bet, payout, "win")
