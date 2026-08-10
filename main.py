@@ -86,7 +86,15 @@ import handlers.promote
 
 import handlers.deposit
 import handlers.withdraw
-import handlers.games      # Handles /dr, /limbo, /cf, etc.
+import handlers.games      # Handles single-player /dr, /limbo, /cf, etc.
+
+# Load PVP Module (Dice, Foot, Dart, Slots, Basket, Bowl)
+try:
+    import handlers.pvp
+    print("✅ PVP games handler loaded.")
+except ImportError as pvp_err:
+    print(f"⚠️ Warning: PVP games handler missing or failed to import ({pvp_err})")
+
 import handlers.codes
 import handlers.admin
 import handlers.rain
