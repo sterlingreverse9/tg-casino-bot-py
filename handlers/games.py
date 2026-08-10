@@ -1,8 +1,19 @@
 import html
 from bot_instance import bot
-from games.dice import play_dice_roll, cb_dice_play  # Imports your dice logic & callback handler
+from games.dice import play_dice_roll, cb_dice_play
 
-# Helper function to extract parameters safely
+# Try importing game engines if they exist in games/
+try:
+    from games.coinflip import play_coinflip
+except ImportError:
+    play_coinflip = None
+
+try:
+    from games.limbo import play_limbo
+except ImportError:
+    play_limbo = None
+
+
 def get_args(message):
     parts = message.text.split()
     return parts[1:] if len(parts) > 1 else []
@@ -16,8 +27,7 @@ def cmd_dice(message):
         bot.reply_to(
             message,
             "⚠️ <b>Usage:</b> <code>/dr &lt;amount&gt; [choice]</code>\n"
-            "<i>Choices: high, low, odd, even, or numbers 1-6</i>\n"
-            "<i>Example: /dr 10 high</i>",
+            "<i>Choices: high, low, odd, even, 1-6</i>",
             parse_mode="HTML"
         )
         return
@@ -25,19 +35,17 @@ def cmd_dice(message):
     try:
         bet_amount = float(args[0])
     except ValueError:
-        bot.reply_to(message, "❌ Invalid bet amount! Please enter a valid number.")
+        bot.reply_to(message, "❌ Invalid bet amount!")
         return
 
     choice = args[1] if len(args) > 1 else None
-    display_name = message.from_user.first_name or "Player"
-
     play_dice_roll(
         bot=bot,
         chat_id=message.chat.id,
         telegram_id=message.from_user.id,
         bet_amount=bet_amount,
         choice=choice,
-        display_name=display_name
+        display_name=message.from_user.first_name or "Player"
     )
 
 
@@ -48,14 +56,30 @@ def cmd_coinflip(message):
     if not args:
         bot.reply_to(
             message,
-            "⚠️ <b>Usage:</b> <code>/cf &lt;amount&gt; &lt;heads|tails&gt;</code>\n"
-            "<i>Example: /cf 10 heads</i>",
+            "⚠️ <b>Usage:</b> <code>/cf &lt;amount&gt; &lt;heads|tails&gt;</code>",
             parse_mode="HTML"
         )
         return
 
-    # Add your existing coinflip execution logic here
-    bot.reply_to(message, "🪙 Coinflip game processing...")
+    if not play_coinflip:
+        bot.reply_to(message, "⚠️ Coinflip engine module is missing!")
+        return
+
+    try:
+        bet_amount = float(args[0])
+        choice = args[1] if len(args) > 1 else "heads"
+    except (ValueError, IndexError):
+        bot.reply_to(message, "❌ Usage: <code>/cf &lt;amount&gt; &lt;heads|tails&gt;</code>", parse_mode="HTML")
+        return
+
+    play_coinflip(
+        bot=bot,
+        chat_id=message.chat.id,
+        telegram_id=message.from_user.id,
+        bet_amount=bet_amount,
+        choice=choice,
+        display_name=message.from_user.first_name or "Player"
+    )
 
 
 # ==================== LIMBO HANDLER ====================
@@ -65,28 +89,27 @@ def cmd_limbo(message):
     if not args:
         bot.reply_to(
             message,
-            "⚠️ <b>Usage:</b> <code>/limbo &lt;amount&gt; &lt;target_multiplier&gt;</code>\n"
-            "<i>Example: /limbo 10 2.0</i>",
+            "⚠️ <b>Usage:</b> <code>/limbo &lt;amount&gt; &lt;target_multiplier&gt;</code>",
             parse_mode="HTML"
         )
         return
 
-    # Add your existing limbo execution logic here
-    bot.reply_to(message, "🚀 Limbo game processing...")
-
-
-# ==================== SLOTS HANDLER ====================
-@bot.message_handler(commands=["slots", "slot"])
-def cmd_slots(message):
-    args = get_args(message)
-    if not args:
-        bot.reply_to(
-            message,
-            "⚠️ <b>Usage:</b> <code>/slots &lt;amount&gt;</code>\n"
-            "<i>Example: /slots 10</i>",
-            parse_mode="HTML"
-        )
+    if not play_limbo:
+        bot.reply_to(message, "⚠️ Limbo engine module is missing!")
         return
 
-    # Add your existing slots execution logic here
-    bot.reply_to(message, "🎰 Slots game processing...")
+    try:
+        bet_amount = float(args[0])
+        target = float(args[1]) if len(args) > 1 else 2.0
+    except (ValueError, IndexError):
+        bot.reply_to(message, "❌ Usage: <code>/limbo &lt;amount&gt; &lt;target_multiplier&gt;</code>", parse_mode="HTML")
+        return
+
+    play_limbo(
+        bot=bot,
+        chat_id=message.chat.id,
+        telegram_id=message.from_user.id,
+        bet_amount=bet_amount,
+        target_multiplier=target,
+        display_name=message.from_user.first_name or "Player"
+    )
