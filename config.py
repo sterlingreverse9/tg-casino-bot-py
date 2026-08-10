@@ -1,9 +1,11 @@
 import os
 from dotenv import load_dotenv
 
+# Load environment variables from .env file
 load_dotenv()
 
-BOT_TOKEN = os.getenv("8305704380:AAEYFpfvZdjV2Od5MDaD4mdeeb-f--XmRVk")
+# Read environment variables using their KEY names
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
