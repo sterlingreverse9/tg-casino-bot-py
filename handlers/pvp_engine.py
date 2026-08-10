@@ -6,7 +6,7 @@ from helpers import announce_win
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 MIN_BET = 5.0
-MAX_BET = 50.0
+MAX_BET = 300.0
 PAYOUT_MULT = 1.8
 
 ACTIVE_MATCHES = {}  # key: match_id
