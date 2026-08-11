@@ -13,7 +13,7 @@ from promo_db import (
 clients = []
 current_client_idx = 0
 
-# Permanent background loop thread for Pyrogram
+# Permanent background event loop dedicated to Pyrogram calls
 promo_loop = asyncio.new_event_loop()
 
 
@@ -47,13 +47,28 @@ async def init_clients():
             print(f"  [-] Account {phone} failed to start: {e}")
 
 
-def get_active_client():
+def get_next_client():
+    """Gets the next account in round-robin sequence (loops back to 1st after last)."""
     global current_client_idx
     if not clients:
         return None
+    
+    # Simple modulo ensures infinite round-robin looping across all loaded accounts
     cli = clients[current_client_idx % len(clients)]
-    current_client_idx += 1
+    current_client_idx = (current_client_idx + 1) % len(clients)
     return cli
+
+
+async def ensure_group_joined(chat_identifier):
+    """Ensures all active clients have joined the target group."""
+    for cli in clients:
+        try:
+            await cli.join_chat(chat_identifier)
+            print(f"  [AUTO-JOIN] Account successfully joined group: {chat_identifier}")
+        except errors.UserAlreadyParticipant:
+            pass
+        except Exception as e:
+            print(f"  [AUTO-JOIN FAIL] Could not join {chat_identifier}: {e}")
 
 
 async def process_message(client, message):
@@ -86,22 +101,48 @@ async def process_message(client, message):
         print(f"[ENGINE] Skipped: No message configured for '{reason}'.")
         return
 
+    # Fetch custom delay set by user (Default: 10 seconds)
+    try:
+        dm_delay = int(get_setting("dm_delay", "10"))
+    except ValueError:
+        dm_delay = 10
+
     print(f"[ENGINE] Attempting DM to user {user_id}...")
 
-    for _ in range(len(clients)):
-        active_cli = get_active_client()
+    # Iterate through available accounts. Round-robin guarantees looping back to 1st.
+    attempts = 0
+    total_accounts = len(clients)
+
+    while attempts < total_accounts:
+        active_cli = get_next_client()
         if not active_cli:
+            print("[ENGINE] ❌ No active accounts available.")
             break
+
+        attempts += 1
         try:
             await active_cli.send_message(user_id, msg_to_send)
             record_dm(user_id, is_reconfirm)
-            print(f"  [SUCCESS] Message sent to {user_id}")
+            print(f"  [SUCCESS] Message delivered to {user_id} using {active_cli.name}")
+            
+            # Apply configured delay between DM attempts to prevent account bans
+            if dm_delay > 0:
+                print(f"  [DELAY] Waiting {dm_delay}s before processing next DM...")
+                await asyncio.sleep(dm_delay)
             break
+
+        except errors.PeerFlood:
+            print(f"  [PEER_FLOOD] {active_cli.name} is spam-restricted! Switching to next account...")
+            # Continue loop -> gets next client in round-robin automatically
+            continue
+
         except errors.FloodWait as e:
-            print(f"  [WAIT] FloodWait on account: {e.value}s. Rotating...")
+            print(f"  [FLOOD_WAIT] Limit hit on {active_cli.name}. Waiting {e.value}s... Switching account...")
             await asyncio.sleep(1)
+            continue
+
         except Exception as e:
-            print(f"  [FAILED] Send failed for {user_id}: {e}")
+            print(f"  [FAILED] Could not send DM using {active_cli.name}: {e}")
             break
 
 
@@ -131,14 +172,12 @@ async def _start_promo_engine_async():
     target_groups = get_groups()
     print(f"[PROMO ENGINE] Target Scraper Groups: {target_groups}")
 
-    for cli in clients:
-        for grp in target_groups:
-            try:
-                await cli.join_chat(grp)
-                print(f"  [+] Joined target group: {grp}")
-            except Exception:
-                pass
+    # Auto-join all added target groups across all connected userbots
+    for grp in target_groups:
+        await ensure_group_joined(grp)
 
+    # Attach group handler
+    for cli in clients:
         cli.add_handler(handlers.MessageHandler(group_listener, filters.group))
 
     print("🔥 PROMO ENGINE IS FULLY ONLINE & LISTENING 🔥\n")
