@@ -1,6 +1,5 @@
 import asyncio
 import threading
-import time
 from pyrogram import Client, filters, handlers, errors
 from promo_db import (
     get_accounts,
@@ -14,16 +13,16 @@ from promo_db import (
 clients = []
 current_client_idx = 0
 
-# Permanent background event loop dedicated to userbot operations
+# Permanent background loop thread for Pyrogram
 promo_loop = asyncio.new_event_loop()
 
 
-def start_loop(loop):
+def _start_loop(loop):
     asyncio.set_event_loop(loop)
     loop.run_forever()
 
 
-loop_thread = threading.Thread(target=start_loop, args=(promo_loop,), daemon=True)
+loop_thread = threading.Thread(target=_start_loop, args=(promo_loop,), daemon=True)
 loop_thread.start()
 
 
@@ -31,21 +30,21 @@ async def init_clients():
     global clients
     accounts = get_accounts()
     clients = []
-    print(f"[INIT] Loading userbot accounts from DB... (Found: {len(accounts)})")
-    
+    print(f"\n[PROMO ENGINE] Loading accounts... Found {len(accounts)}")
+
     for phone, api_id, api_hash, session_str in accounts:
         try:
             cli = Client(
-                f"session_{phone}",
-                api_id=api_id,
+                f"session_{phone.replace('+', '')}",
+                api_id=int(api_id),
                 api_hash=api_hash,
                 session_string=session_str,
             )
             await cli.start()
             clients.append(cli)
-            print(f"  [+] Connected userbot: {phone}")
+            print(f"  [+] Active Userbot: {phone}")
         except Exception as e:
-            print(f"  [-] Failed to start account {phone}: {e}")
+            print(f"  [-] Account {phone} failed to start: {e}")
 
 
 def get_active_client():
@@ -57,25 +56,10 @@ def get_active_client():
     return cli
 
 
-async def sync_casino_members_loop():
-    while True:
-        try:
-            cli = get_active_client()
-            if cli:
-                members = []
-                async for member in cli.get_chat_members("thecassinogroup"):
-                    members.append(member.user.id)
-                update_casino_members(members)
-                print(f"[SYNC] Updated casino members: {len(members)} found.")
-        except Exception as e:
-            print(f"[SYNC ERROR] Casino sync error: {e}")
-        await asyncio.sleep(1800)  # 30 mins
-
-
 async def process_message(client, message):
     status = get_setting("promo_status", "stop")
     if status != "start":
-        print(f"[SKIP] Promo engine is currently {status.upper()}. Toggle status in DM.")
+        print(f"[ENGINE] Skipped message: Status is set to '{status.upper()}' (Enable in DM)")
         return
 
     user = message.from_user
@@ -86,7 +70,7 @@ async def process_message(client, message):
     can_dm, reason = can_dm_user(user_id)
 
     if not can_dm:
-        print(f"[SKIP] User {user_id} cannot be messaged. Reason: {reason}")
+        print(f"[ENGINE] User {user_id} skipped. Reason: {reason}")
         return
 
     msg_to_send = ""
@@ -99,27 +83,25 @@ async def process_message(client, message):
         is_reconfirm = True
 
     if not msg_to_send:
-        print(f"[SKIP] No promotion message configured for reason '{reason}'.")
+        print(f"[ENGINE] Skipped: No message configured for '{reason}'.")
         return
 
-    print(f"[ACTION] Sending DM to target user {user_id}...")
+    print(f"[ENGINE] Attempting DM to user {user_id}...")
 
     for _ in range(len(clients)):
         active_cli = get_active_client()
         if not active_cli:
-            print("[ERROR] No active clients available.")
             break
         try:
             await active_cli.send_message(user_id, msg_to_send)
             record_dm(user_id, is_reconfirm)
-            print(f"  [SUCCESS] DM delivered to user {user_id}")
+            print(f"  [SUCCESS] Message sent to {user_id}")
             break
         except errors.FloodWait as e:
-            print(f"  [LIMIT] Rate limited on account. Rotating... Wait: {e.value}s")
+            print(f"  [WAIT] FloodWait on account: {e.value}s. Rotating...")
             await asyncio.sleep(1)
-            continue
         except Exception as e:
-            print(f"  [FAILED] Could not send DM to {user_id}: {e}")
+            print(f"  [FAILED] Send failed for {user_id}: {e}")
             break
 
 
@@ -127,54 +109,41 @@ async def group_listener(cli, msg):
     raw_groups = get_groups()
     target_groups = [g.lower().strip("@") for g in raw_groups]
 
-    # Handle chat identification safely
     chat_username = (msg.chat.username or "").lower()
     chat_id = str(msg.chat.id)
 
-    print(f"[EVENT] New message captured in chat: '{msg.chat.title}' (@{chat_username} / {chat_id})")
+    print(f"\n[MSG CAPTURED] Chat: '{msg.chat.title}' (@{chat_username} | ID: {chat_id})")
 
-    # Check if current chat matches target groups
-    if chat_username in target_groups or chat_id in target_groups:
-        print(f"  [MATCH] Target group detected!")
+    # Match username or channel ID against target list
+    if chat_username in target_groups or chat_id in target_groups or chat_id.replace("-100", "") in target_groups:
+        print("  --> Target group match! Processing promo pipeline...")
         await process_message(cli, msg)
     else:
-        print(f"  [IGNORE] Group @{chat_username} is not in target list {target_groups}")
+        print(f"  --> Not in target list: {target_groups}")
 
 
 async def _start_promo_engine_async():
     await init_clients()
     if not clients:
-        print("❌ No userbot accounts loaded! Add an account using /promote in DM first.")
+        print("[PROMO ENGINE] ❌ No userbot accounts found. Add one in Telegram DM using /promote.")
         return
 
     target_groups = get_groups()
-    print(f"[INIT] Loaded target groups: {target_groups}")
+    print(f"[PROMO ENGINE] Target Scraper Groups: {target_groups}")
 
     for cli in clients:
         for grp in target_groups:
             try:
                 await cli.join_chat(grp)
-                print(f"  [+] Account joined target group: {grp}")
-            except Exception as e:
-                print(f"  [-] Could not join target group {grp}: {e}")
+                print(f"  [+] Joined target group: {grp}")
+            except Exception:
+                pass
 
-        # Bind group handler globally to capture messages
-        cli.add_handler(
-            handlers.MessageHandler(group_listener, filters.group)
-        )
+        cli.add_handler(handlers.MessageHandler(group_listener, filters.group))
 
-    promo_loop.create_task(sync_casino_members_loop())
-    print("🔥 Promo MTProto Userbot Engine is Running and Listening...")
+    print("🔥 PROMO ENGINE IS FULLY ONLINE & LISTENING 🔥\n")
 
 
 def start_promo_engine():
+    """Call this function inside main.py to fire up the engine."""
     asyncio.run_coroutine_threadsafe(_start_promo_engine_async(), promo_loop)
-
-
-if __name__ == "__main__":
-    start_promo_engine()
-    try:
-        while True:
-            time.sleep(1)
-    except (KeyboardInterrupt, SystemExit):
-        print("Engine stopped.")
