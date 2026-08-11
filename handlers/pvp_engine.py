@@ -236,15 +236,23 @@ def handle_pvp_dice_roll(message):
 
     chat_id = message.chat.id
 
-    # 1. ANTI-CHEAT: Multi-Layer Check for Forwarded / Copied Rolls
-    is_forwarded = (
-        getattr(message, 'forward_date', None) is not None
-        or getattr(message, 'forward_from', None) is not None
-        or getattr(message, 'forward_from_chat', None) is not None
-        or getattr(message, 'forward_origin', None) is not None
-    )
+    # 1. HARDENED ANTI-CHEAT DETECTOR
+    # Check A: Direct Telegram forward attributes
+    has_forward_attr = any([
+        getattr(message, 'forward_date', None) is not None,
+        getattr(message, 'forward_from', None) is not None,
+        getattr(message, 'forward_from_chat', None) is not None,
+        getattr(message, 'forward_origin', None) is not None,
+        getattr(message, 'forward_signature', None) is not None,
+        getattr(message, 'forward_sender_name', None) is not None
+    ])
 
-    if is_forwarded:
+    # Check B: Timestamp comparison (Fresh rolls arrive within 3 seconds of server time)
+    now = time.time()
+    msg_date = getattr(message, 'date', now)
+    is_old_roll = (now - msg_date) > 3.0
+
+    if has_forward_attr or is_old_roll:
         cheater_name = message.from_user.first_name or "Player"
         winner_id = game.p2_id if user_id == game.p1_id else game.p1_id
         winner_name = game.p2_name if user_id == game.p1_id else game.p2_name
@@ -266,8 +274,8 @@ def handle_pvp_dice_roll(message):
         bot.send_message(
             chat_id,
             f"🚫 <b>CHEATING DETECTED!</b>\n\n"
-            f"⚠️ <b>{cheater_name}</b> used a <b>forwarded dice roll</b>!\n"
-            f"🚨 <b>Punishment:</b> Disqualified & bet forfeited.\n\n"
+            f"⚠️ <b>{cheater_name}</b> tried to use a <b>forwarded/old dice roll</b>!\n"
+            f"🚨 <b>Punishment:</b> Instant Disqualification & Bet Forfeited.\n\n"
             f"{win_msg}",
             parse_mode="HTML"
         )
