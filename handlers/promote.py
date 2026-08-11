@@ -16,6 +16,7 @@ from telebot import types
 
 AUTHORIZED_USER = "mrpuppyx"
 USER_STATES = {}
+ACTIVE_CLIENTS = {}  # Retains connected Pyrogram instances per chat_id between OTP steps
 
 
 def is_authorized(user):
@@ -56,7 +57,6 @@ def build_promote_dashboard():
     return markup, status_str
 
 
-# Helper function to execute Pyrogram operations cleanly inside isolated event loop threads
 def run_in_dedicated_loop(coro):
     result = None
     exception = None
@@ -81,25 +81,28 @@ def run_in_dedicated_loop(coro):
     return result
 
 
-async def _async_send_otp(api_id, api_hash, phone):
+async def _async_send_otp(chat_id, api_id, api_hash, phone):
     cli = Client(
         f"temp_{phone}", api_id=api_id, api_hash=api_hash, in_memory=True
     )
     await cli.connect()
     sent_code = await cli.send_code(phone)
-    await cli.disconnect()
+    ACTIVE_CLIENTS[chat_id] = cli  # Keep client alive and connected
     return sent_code.phone_code_hash
 
 
-async def _async_sign_in(api_id, api_hash, phone, phone_code_hash, otp):
-    cli = Client(
-        f"temp_{phone}", api_id=api_id, api_hash=api_hash, in_memory=True
-    )
-    await cli.connect()
-    await cli.sign_in(phone, phone_code_hash, otp)
-    session_str = await cli.export_session_string()
-    await cli.disconnect()
-    return session_str
+async def _async_sign_in(chat_id, phone, phone_code_hash, otp):
+    cli = ACTIVE_CLIENTS.get(chat_id)
+    if not cli:
+        raise Exception("Login session lost. Please restart the login process.")
+
+    try:
+        await cli.sign_in(phone, phone_code_hash, otp)
+        session_str = await cli.export_session_string()
+        return session_str
+    finally:
+        await cli.disconnect()
+        ACTIVE_CLIENTS.pop(chat_id, None)
 
 
 @bot.message_handler(commands=["promote", "Promote"])
@@ -310,7 +313,7 @@ def process_promote_inputs(message):
 
         try:
             phone_code_hash = run_in_dedicated_loop(
-                _async_send_otp(state["api_id"], state["api_hash"], phone)
+                _async_send_otp(chat_id, state["api_id"], state["api_hash"], phone)
             )
             state["phone_code_hash"] = phone_code_hash
             state["step"] = "OTP"
@@ -328,8 +331,7 @@ def process_promote_inputs(message):
         try:
             session_str = run_in_dedicated_loop(
                 _async_sign_in(
-                    state["api_id"],
-                    state["api_hash"],
+                    chat_id,
                     state["phone"],
                     state["phone_code_hash"],
                     otp,
