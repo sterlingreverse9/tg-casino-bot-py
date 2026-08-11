@@ -16,7 +16,48 @@ from telebot import types
 
 AUTHORIZED_USER = "mrpuppyx"
 USER_STATES = {}
-ACTIVE_CLIENTS = {}  # Retains connected Pyrogram instances per chat_id between OTP steps
+ACTIVE_CLIENTS = {}  # Retains active connected Pyrogram client instances
+
+# Permanent background event loop for Pyrogram operations
+PYROGRAM_LOOP = asyncio.new_event_loop()
+
+
+def _start_asyncio_thread():
+    asyncio.set_event_loop(PYROGRAM_LOOP)
+    PYROGRAM_LOOP.run_forever()
+
+
+threading.Thread(target=_start_asyncio_thread, daemon=True).start()
+
+
+def run_in_pyrogram_loop(coro):
+    """Executes a coroutine safely on the dedicated Pyrogram loop thread."""
+    future = asyncio.run_coroutine_threadsafe(coro, PYROGRAM_LOOP)
+    return future.result()
+
+
+async def _async_send_otp(chat_id, api_id, api_hash, phone):
+    cli = Client(
+        f"temp_{phone}", api_id=api_id, api_hash=api_hash, in_memory=True
+    )
+    await cli.connect()
+    sent_code = await cli.send_code(phone)
+    ACTIVE_CLIENTS[chat_id] = cli  # Keep connected instance alive
+    return sent_code.phone_code_hash
+
+
+async def _async_sign_in(chat_id, phone, phone_code_hash, otp):
+    cli = ACTIVE_CLIENTS.get(chat_id)
+    if not cli:
+        raise Exception("Login session lost. Please restart the process.")
+
+    try:
+        await cli.sign_in(phone, phone_code_hash, str(otp).strip())
+        session_str = await cli.export_session_string()
+        return session_str
+    finally:
+        await cli.disconnect()
+        ACTIVE_CLIENTS.pop(chat_id, None)
 
 
 def is_authorized(user):
@@ -55,54 +96,6 @@ def build_promote_dashboard():
         ),
     )
     return markup, status_str
-
-
-def run_in_dedicated_loop(coro):
-    result = None
-    exception = None
-
-    def worker():
-        nonlocal result, exception
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(coro)
-        except Exception as e:
-            exception = e
-        finally:
-            loop.close()
-
-    thread = threading.Thread(target=worker)
-    thread.start()
-    thread.join()
-
-    if exception:
-        raise exception
-    return result
-
-
-async def _async_send_otp(chat_id, api_id, api_hash, phone):
-    cli = Client(
-        f"temp_{phone}", api_id=api_id, api_hash=api_hash, in_memory=True
-    )
-    await cli.connect()
-    sent_code = await cli.send_code(phone)
-    ACTIVE_CLIENTS[chat_id] = cli  # Keep client alive and connected
-    return sent_code.phone_code_hash
-
-
-async def _async_sign_in(chat_id, phone, phone_code_hash, otp):
-    cli = ACTIVE_CLIENTS.get(chat_id)
-    if not cli:
-        raise Exception("Login session lost. Please restart the login process.")
-
-    try:
-        await cli.sign_in(phone, phone_code_hash, otp)
-        session_str = await cli.export_session_string()
-        return session_str
-    finally:
-        await cli.disconnect()
-        ACTIVE_CLIENTS.pop(chat_id, None)
 
 
 @bot.message_handler(commands=["promote", "Promote"])
@@ -312,7 +305,7 @@ def process_promote_inputs(message):
         state["phone"] = phone
 
         try:
-            phone_code_hash = run_in_dedicated_loop(
+            phone_code_hash = run_in_pyrogram_loop(
                 _async_send_otp(chat_id, state["api_id"], state["api_hash"], phone)
             )
             state["phone_code_hash"] = phone_code_hash
@@ -329,7 +322,7 @@ def process_promote_inputs(message):
     elif step == "OTP":
         otp = message.text.strip()
         try:
-            session_str = run_in_dedicated_loop(
+            session_str = run_in_pyrogram_loop(
                 _async_sign_in(
                     chat_id,
                     state["phone"],
