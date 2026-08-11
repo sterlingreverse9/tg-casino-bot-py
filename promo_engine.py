@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 from pyrogram import Client, filters, handlers, errors
 from promo_db import (
@@ -12,6 +13,19 @@ from promo_db import (
 
 clients = []
 current_client_idx = 0
+
+# Shared event loop for Pyrogram background tasks
+promo_loop = asyncio.new_event_loop()
+
+
+def start_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+
+# Start background event loop thread once
+loop_thread = threading.Thread(target=start_loop, args=(promo_loop,), daemon=True)
+loop_thread.start()
 
 
 async def init_clients():
@@ -104,7 +118,7 @@ async def group_listener(cli, msg):
     target_groups = [g.lower().strip("@") for g in get_groups()]
     chat_identifier = (
         msg.chat.username.lower()
-        if msg.chat.username
+        if msg.chat and msg.chat.username
         else str(msg.chat.id)
     )
 
@@ -112,7 +126,7 @@ async def group_listener(cli, msg):
         await process_message(cli, msg)
 
 
-async def start_promo_engine():
+async def _start_promo_engine_async():
     await init_clients()
     if not clients:
         print(
@@ -121,7 +135,7 @@ async def start_promo_engine():
         return
 
     # Start background task for syncing group members
-    asyncio.create_task(sync_casino_members_loop())
+    promo_loop.create_task(sync_casino_members_loop())
 
     target_groups = get_groups()
 
@@ -139,11 +153,17 @@ async def start_promo_engine():
         )
 
     print("🔥 Promo MTProto Userbot Engine is Running...")
-    await asyncio.Event().wait()
+
+
+def start_promo_engine():
+    """Thread-safe synchronous starter call for main.py or handlers."""
+    asyncio.run_coroutine_threadsafe(_start_promo_engine_async(), promo_loop)
 
 
 if __name__ == "__main__":
+    start_promo_engine()
     try:
-        asyncio.run(start_promo_engine())
+        while True:
+            time.sleep(1)
     except (KeyboardInterrupt, SystemExit):
         print("Engine stopped.")
